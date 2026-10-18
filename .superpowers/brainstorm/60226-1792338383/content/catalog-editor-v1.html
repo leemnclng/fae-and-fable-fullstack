@@ -1,0 +1,87 @@
+<h2>Section builder: first sketch</h2>
+<p class="subtitle">Two parts: a <b>Products</b> list where the admin manages mirrors and packages, and a <b>Page</b> editor where they build the catalog page out of sections. Items marked "guess" are my assumptions, so correct anything.</p>
+
+<style>
+  .ed { display:grid; grid-template-columns:200px 1fr 210px; gap:8px; font-size:12px; min-height:380px; }
+  .col { border:1px solid #ddd; border-radius:8px; padding:8px; background:#fafafa; display:flex; flex-direction:column; gap:6px; }
+  .col.preview { background:#fff; }
+  .tabs { display:flex; gap:4px; margin-bottom:4px; }
+  .tab { padding:3px 10px; border-radius:12px; border:1px solid #ccc; background:#fff; }
+  .tab.on { background:#4a1d33; color:#fff; border-color:#4a1d33; }
+  .sec { border:1px solid #ccc; background:#fff; border-radius:5px; padding:5px 7px; display:flex; justify-content:space-between; }
+  .sec.sel { border:2px solid #b5546f; }
+  .muted { color:#888; }
+  .slide { height:90px; border-radius:6px; background:linear-gradient(120deg,#d9a7b3,#f3dde2); display:flex; flex-direction:column; align-items:center; justify-content:center; color:#4a1d33; }
+  .dots { margin-top:6px; letter-spacing:4px; }
+  .g3 { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .prod { border:1px solid #eee; border-radius:5px; overflow:hidden; }
+  .prod .img { height:50px; background:#eee; }
+  .prod .t { padding:3px 5px; }
+  .pk { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .pk div { border:1px solid #e3c4cc; border-radius:6px; padding:6px; background:#fff7f8; }
+  .fld { display:flex; flex-direction:column; gap:2px; }
+  .fld span { color:#666; }
+  .box { border:1px solid #ccc; border-radius:4px; background:#fff; padding:3px 5px; }
+  .guess { font-size:10px; background:#fff3cd; color:#7a5b00; padding:0 4px; border-radius:3px; margin-left:4px; }
+  .btn { background:#4a1d33; color:#fff; border-radius:12px; text-align:center; padding:3px; }
+</style>
+
+<div class="mockup">
+  <div class="mockup-header">Admin → Catalog</div>
+  <div class="mockup-body">
+    <div class="tabs"><span class="tab">Products</span><span class="tab on">Page</span></div>
+    <div class="ed">
+      <div class="col">
+        <b>Sections</b>
+        <div class="sec"><span>☰ Slideshow</span><span>👁</span></div>
+        <div class="sec sel"><span>☰ Mirrors</span><span>👁</span></div>
+        <div class="sec"><span>☰ Packages</span><span>👁</span></div>
+        <div class="sec"><span>☰ Text + photo</span><span>👁</span></div>
+        <div class="sec"><span>☰ Call to action</span><span>👁</span></div>
+        <div class="sec muted">+ Add section</div>
+        <div class="muted" style="margin-top:auto">Drag to reorder · 👁 hides</div>
+        <div class="btn">Publish</div>
+        <div class="muted">Draft saved · Preview <span class="guess">guess</span></div>
+      </div>
+      <div class="col preview">
+        <div class="slide"><b>Our Mirrors</b><span>Reflect the magic of your event</span><span class="dots">● ○ ○</span></div>
+        <b style="margin-top:4px">Mirrors</b>
+        <div class="g3">
+          <div class="prod"><div class="img"></div><div class="t">Classic Gold<br><span class="muted">from ₱15,000</span></div></div>
+          <div class="prod"><div class="img"></div><div class="t">Rose Arch<br><span class="muted">from ₱18,000</span></div></div>
+          <div class="prod"><div class="img"></div><div class="t">Mini Vanity<br><span class="muted">from ₱9,000</span></div></div>
+        </div>
+        <b style="margin-top:4px">Packages</b>
+        <div class="pk">
+          <div><b>Basic</b><br>2 hrs · prints</div>
+          <div><b>Gold</b><br>3 hrs · album</div>
+          <div><b>Premium</b><br>4 hrs · all-in</div>
+        </div>
+      </div>
+      <div class="col">
+        <b>Mirrors section</b>
+        <div class="fld"><span>Heading</span><div class="box">Mirrors</div></div>
+        <div class="fld"><span>Show</span><div class="box">All mirrors ▾</div></div>
+        <div class="fld"><span>Layout</span><div class="box">Grid · Carousel · List</div></div>
+        <div class="fld"><span>Columns</span><div class="box">3</div></div>
+        <div>☑ Show prices</div>
+        <div>☑ "Inquire" button on each <span class="guess">guess</span></div>
+        <div class="fld"><span>Background</span><div class="box">White · Tint · Photo</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mockup" style="margin-top:16px">
+  <div class="mockup-header">Admin → Catalog → Products</div>
+  <div class="mockup-body" style="font-size:12px">
+    <div class="tabs"><span class="tab on">Products</span><span class="tab">Page</span></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      <div class="prod"><div class="img" style="height:70px"></div><div class="t"><b>Classic Gold</b> · Mirror<br><span class="muted">₱15,000 · 4 photos</span></div></div>
+      <div class="prod"><div class="img" style="height:70px"></div><div class="t"><b>Rose Arch</b> · Mirror<br><span class="muted">₱18,000 · 6 photos</span></div></div>
+      <div class="prod"><div class="img" style="height:70px"></div><div class="t"><b>Gold Package</b> · Package<br><span class="muted">₱25,000 · inclusions</span></div></div>
+      <div class="prod muted" style="display:flex;align-items:center;justify-content:center">+ Add product</div>
+    </div>
+    <p class="muted">Each product: name, type (mirror / package), photos (several, for its own gallery), price or "from" price, description, inclusions list <span class="guess">guess</span>, visible on/off.</p>
+  </div>
+</div>

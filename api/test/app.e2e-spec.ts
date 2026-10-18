@@ -1,0 +1,521 @@
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+
+const dataDir = mkdtempSync(join(tmpdir(), 'fae-fable-'));
+Object.assign(process.env, {
+  DATA_DIR: dataDir,
+  JWT_SECRET: 'test-secret',
+  ADMIN_EMAIL: 'admin@test.dev',
+  ADMIN_PASSWORD: 'pw',
+});
+
+const { AppModule } = await import('../src/app.module.js');
+const { setup } = await import('../src/main.js');
+const { Db } = await import('../src/db.js');
+const { EventsService, expiresAt } = await import('../src/events.js');
+
+// smallest valid JPEG header is enough; the API only checks the extension
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+
+describe('Fae&Fable API', () => {
+  let app: NestExpressApplication;
+  let admin: string;
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = setup(moduleRef.createNestApplication<NestExpressApplication>());
+    await app.init();
+    const res = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: 'ADMIN@test.dev', password: 'pw' })
+      .expect(201);
+    admin = `Bearer ${res.body.token}`;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('expiresAt keeps links open through the 15th day after the event', () => {
+    expect(expiresAt('2026-01-01')).toBe('2026-01-17T00:00:00.000Z');
+    expect(() => expiresAt('01/01/2026')).toThrow();
+  });
+
+  it('rejects bad logins and unauthenticated admin calls', async () => {
+    const http = request(app.getHttpServer());
+    await http.post('/auth/login').send({ email: 'admin@test.dev', password: 'nope' }).expect(401);
+    await http.get('/admin/events').expect(401);
+  });
+
+  it('manages public content and settings', async () => {
+    const http = request(app.getHttpServer());
+    await http.put('/admin/settings').set('Authorization', admin).send({ businessName: 'Fae&Fable', hacked: 'x' }).expect(200);
+    const pub = await http.get('/content').expect(200);
+    expect(pub.body).toEqual({ settings: { businessName: 'Fae&Fable' } });
+    // Catalog drafts live in settings but are never writable or readable through it
+    await http.put('/admin/settings').set('Authorization', admin).send({ catalogDraft: 'x' }).expect(200);
+    expect((await http.get('/content').expect(200)).body.settings).not.toHaveProperty('catalogDraft');
+
+    // Banner: replacing deletes the old file, removing clears it; settings PUT can't set it
+    const first = (await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'a.jpg').expect(200)).body.banner;
+    expect(first).toMatch(/^\/files\/.+\.jpg$/);
+    const second = (await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'b.jpg').expect(200)).body.banner;
+    await http.get(first).expect(404);
+    await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'clip.mp4').expect(400);
+    await http.put('/admin/settings').set('Authorization', admin).send({ banner: 'x.jpg' }).expect(200);
+    expect((await http.get('/content').expect(200)).body.settings.banner).toBe(second);
+    await http.delete('/admin/banner').set('Authorization', admin).expect(200);
+    await http.get(second).expect(404);
+    expect((await http.get('/content').expect(200)).body.settings).not.toHaveProperty('banner');
+    await http.put('/admin/banner').expect(401);
+  });
+
+  describe('catalog products', () => {
+    const products = '/admin/catalog/products';
+    const create = (draft: object) => request(app.getHttpServer()).post(products).set('Authorization', admin).send({ draft });
+    const save = (id: number, draft: object) => request(app.getHttpServer()).put(`${products}/${id}`).set('Authorization', admin).send({ draft });
+    const act = (id: number, action: 'publish' | 'discard') => request(app.getHttpServer()).post(`${products}/${id}/${action}`).set('Authorization', admin);
+    const upload = async () => (await request(app.getHttpServer()).post('/admin/catalog/uploads').set('Authorization', admin).attach('image', JPEG, 'a.jpg').expect(201)).body.file as string;
+
+    it('products stay draft until published', async () => {
+      const http = request(app.getHttpServer());
+      const created = (await create({ name: 'Rose Arch', type: 'mirror', price: '₱18,000' }).expect(201)).body;
+      expect(created).toMatchObject({ status: 'draft', published: null, draft: { name: 'Rose Arch', visible: true, inclusions: [], photos: [] } });
+      await http.get(`/catalog/products/${created.id}`).expect(404);
+
+      expect((await act(created.id, 'publish').expect(201)).body.status).toBe('published');
+      const live = (await http.get(`/catalog/products/${created.id}`).expect(200)).body;
+      expect(live).toMatchObject({ id: created.id, name: 'Rose Arch', price: '₱18,000' });
+      expect(live).not.toHaveProperty('visible');
+
+      const hidden = { name: 'Rose Arch', type: 'mirror', price: '₱20,000', visible: false };
+      expect((await save(created.id, hidden).expect(200)).body.status).toBe('changed');
+      expect((await http.get(`/catalog/products/${created.id}`).expect(200)).body.price).toBe('₱18,000');
+      await act(created.id, 'publish').expect(201);
+      await http.get(`/catalog/products/${created.id}`).expect(404);
+
+      await save(created.id, { ...hidden, name: 'Typo' }).expect(200);
+      const discarded = (await act(created.id, 'discard').expect(201)).body;
+      expect(discarded.status).toBe('published');
+      expect(discarded.draft).toEqual(discarded.published);
+    });
+
+    it('validates products', async () => {
+      const http = request(app.getHttpServer());
+      await create({ name: '' }).expect(400);
+      expect((await create({ name: 'Ok', photos: ['../x.jpg'] }).expect(201)).body.draft.photos).toEqual([]);
+      await http.post(products).send({ draft: { name: 'X' } }).expect(401);
+      await http.post('/admin/catalog/uploads').set('Authorization', admin).attach('image', JPEG, 'clip.mp4').expect(400);
+      expect(await upload()).toMatch(/\.jpg$/);
+      const fresh = (await create({ name: 'Never live' }).expect(201)).body;
+      await act(fresh.id, 'discard').expect(400);
+      await save(999999, { name: 'Ghost' }).expect(404);
+    });
+
+    it('keeps photos the published version still uses', async () => {
+      const http = request(app.getHttpServer());
+      const file = await upload();
+      const p = (await create({ name: 'Photo mirror', photos: [file] }).expect(201)).body;
+      await act(p.id, 'publish').expect(201);
+      await save(p.id, { name: 'Photo mirror', photos: [] }).expect(200);
+      await http.get(`/files/${file}`).expect(200);
+      await act(p.id, 'publish').expect(201);
+      await http.get(`/files/${file}`).expect(404);
+    });
+
+    it('orders and deletes products', async () => {
+      const http = request(app.getHttpServer());
+      const ids = (await http.get(products).set('Authorization', admin).expect(200)).body.map((p: { id: number }) => p.id);
+      const reversed = [...ids].reverse();
+      const ordered = (await http.put(`${products}/order`).set('Authorization', admin).send({ ids: reversed }).expect(200)).body;
+      expect(ordered.map((p: { id: number }) => p.id)).toEqual(reversed);
+
+      const first = reversed[0];
+      await act(first, 'publish').expect(201);
+      await http.delete(`${products}/${first}`).set('Authorization', admin).expect(200);
+      expect((await http.get(products).set('Authorization', admin).expect(200)).body).toHaveLength(ids.length - 1);
+      await http.get(`/catalog/products/${first}`).expect(404);
+    });
+  });
+
+  describe('catalog page', () => {
+    const page = '/admin/catalog/page';
+    const savePage = (sections: object[]) => request(app.getHttpServer()).put(page).set('Authorization', admin).send({ sections });
+    const publishPage = () => request(app.getHttpServer()).post(`${page}/publish`).set('Authorization', admin).expect(201);
+
+    it('page edits stay draft until published', async () => {
+      const http = request(app.getHttpServer());
+      const types = (body: { sections: { type: string }[] }) => body.sections.map((s) => s.type);
+      expect(types((await http.get('/catalog').expect(200)).body)).toEqual(['slideshow', 'products', 'products', 'cta']);
+      await http.post(`${page}/discard`).set('Authorization', admin).expect(400);
+
+      expect((await savePage([{ id: 'c', type: 'cta', heading: 'Book us' }]).expect(200)).body.hasChanges).toBe(true);
+      expect(types((await http.get('/catalog').expect(200)).body)).toEqual(['slideshow', 'products', 'products', 'cta']);
+
+      expect((await publishPage()).body.hasChanges).toBe(false);
+      expect((await http.get('/catalog').expect(200)).body.sections).toEqual([
+        { id: 'c', type: 'cta', hidden: false, heading: 'Book us', text: '', buttonLabel: 'Inquire', background: 'white', backgroundImage: null },
+      ]);
+
+      await savePage([{ id: 'c', type: 'cta', heading: 'Book us' }, { id: 'h', type: 'text', hidden: true }]).expect(200);
+      await publishPage();
+      expect((await http.get('/catalog').expect(200)).body.sections.map((s: { id: string }) => s.id)).toEqual(['c']);
+
+      await savePage([{ type: 'cta', heading: 'x'.repeat(121) }]).expect(400);
+      await http.put(page).send({ sections: [] }).expect(401);
+
+      await savePage([]).expect(200);
+      const discarded = (await http.post(`${page}/discard`).set('Authorization', admin).expect(201)).body;
+      expect(discarded.draft).toEqual(discarded.published);
+    });
+
+    it('public catalog skips products that are not live', async () => {
+      const http = request(app.getHttpServer());
+      const make = async (name: string, publish: boolean, visible = true) => {
+        const p = (await http.post('/admin/catalog/products').set('Authorization', admin).send({ draft: { name, visible } }).expect(201)).body;
+        if (publish) await http.post(`/admin/catalog/products/${p.id}/publish`).set('Authorization', admin).expect(201);
+        return p.id as number;
+      };
+      const live = await make('Live', true);
+      const draft = await make('Draft only', false);
+      const hidden = await make('Hidden', true, false);
+      await savePage([{ id: 'm', type: 'products', pick: [live, draft, hidden, 999999] }]).expect(200);
+      await publishPage();
+
+      const body = (await http.get('/catalog').expect(200)).body;
+      expect(body.sections[0].pick).toEqual([live]);
+      const ids = body.products.map((p: { id: number }) => p.id);
+      expect(ids).toContain(live);
+      expect(ids).not.toContain(draft);
+      expect(ids).not.toContain(hidden);
+    });
+
+    it('never leaks the draft through /content', async () => {
+      const http = request(app.getHttpServer());
+      await savePage([{ id: 'secret', type: 'text', heading: 'Unreleased' }]).expect(200);
+      const { settings } = (await http.get('/content').expect(200)).body;
+      expect(settings).not.toHaveProperty('catalogDraft');
+      expect(settings).not.toHaveProperty('catalogPublished');
+    });
+
+    it('keeps an old banner photo the catalog page still shows', async () => {
+      const http = request(app.getHttpServer());
+      // The default page's slideshow uses the banner, so a published page can hold the banner's file name
+      const file = (await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'old.jpg').expect(200)).body.banner.replace('/files/', '');
+      await savePage([{ id: 's', type: 'slideshow', slides: [{ image: file }] }]).expect(200);
+      await publishPage();
+      await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'new.jpg').expect(200);
+      await http.get(`/files/${file}`).expect(200);
+      await http.delete('/admin/banner').set('Authorization', admin).expect(200);
+    });
+
+    it('deletes a section photo once neither version uses it', async () => {
+      const http = request(app.getHttpServer());
+      const file = (await http.post('/admin/catalog/uploads').set('Authorization', admin).attach('image', JPEG, 'bg.jpg').expect(201)).body.file;
+      await savePage([{ id: 't', type: 'text', image: file }]).expect(200);
+      await publishPage();
+      await savePage([]).expect(200);
+      await http.get(`/files/${file}`).expect(200);
+      await publishPage();
+      await http.get(`/files/${file}`).expect(404);
+    });
+  });
+
+  it('runs the event flow: QR + passcode upload, client gallery, expiry', async () => {
+    const http = request(app.getHttpServer());
+    const event = (
+      await http
+        .post('/admin/events')
+        .set('Authorization', admin)
+        .send({ name: 'Ana & Ben', clientName: 'Ana', eventDate: new Date().toISOString().slice(0, 10), passcode: 'abcd' })
+        .expect(201)
+    ).body;
+    expect(event.qr).toMatch(/^data:image\/png;base64,/);
+    const slug = event.guestUrl.split('/e/')[1];
+    const clientToken = event.clientUrl.split('/c/')[1];
+
+    await http.get(`/guest/${slug}`).expect(200);
+    await http.post(`/guest/${slug}/photos`).attach('photos', JPEG, 'a.jpg').expect(401);
+    await http.post(`/guest/${slug}/unlock`).send({ name: 'Guest', passcode: 'wrong' }).expect(401);
+    const guest = `Bearer ${(await http.post(`/guest/${slug}/unlock`).send({ name: 'Guest', passcode: 'ABCD' }).expect(201)).body.token}`;
+    await http.post(`/guest/${slug}/photos`).set('Authorization', admin).attach('photos', JPEG, 'a.jpg').expect(401);
+    await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'a.jpg').attach('photos', JPEG, 'b.png').expect(201);
+
+    const gallery = (await http.get(`/client/${clientToken}`).expect(200)).body;
+    expect(gallery.photos).toHaveLength(2);
+    await http.get(gallery.photos[0].url).expect(200);
+    await http.get(`${gallery.photos[0].url}?download=1`).expect('Content-Disposition', /attachment/);
+
+    // Expire it: links return 410, then the purge deletes the event and its files
+    const db = app.get(Db);
+    db.sql.prepare('UPDATE events SET expires_at = ? WHERE id = ?').run('2000-01-01T00:00:00.000Z', event.id);
+    await http.get(`/client/${clientToken}`).expect(410);
+    await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'c.jpg').expect(410);
+    expect(app.get(EventsService).purgeExpired()).toBe(1);
+    await http.get(`/client/${clientToken}`).expect(404);
+    expect(db.sql.prepare('SELECT COUNT(*) AS n FROM photos').get()).toEqual({ n: 0 });
+  });
+
+  it('serves the public events page: opt-in listing, covers, client lookup', async () => {
+    const http = request(app.getHttpServer());
+    const today = new Date().toISOString().slice(0, 10);
+    const create = (body: object) =>
+      http.post('/admin/events').set('Authorization', admin).send({ clientName: 'Cy', eventDate: today, ...body }).expect(201).then((r) => r.body);
+    const priv = await create({ name: 'Private Party', clientEmail: 'cy@test.dev' });
+    const pub = await create({ name: 'Open Gala', clientEmail: 'Cy@Test.dev', isPublic: 'true', passcode: 'gala' });
+    expect(priv.isPublic).toBe(false);
+    expect(pub.clientCode).toMatch(/^[A-Z2-9]{6}$/);
+
+    let list = (await http.get('/events').expect(200)).body;
+    expect(list.map((e: { name: string }) => e.name)).toEqual(['Open Gala']);
+    expect(list[0].cover).toBeNull();
+
+    // A guest upload gives the public event a cover; the private event never exposes one
+    const slug = pub.guestUrl.split('/e/')[1];
+    const guest = `Bearer ${(await http.post(`/guest/${slug}/unlock`).send({ name: 'Guest', passcode: 'gala' })).body.token}`;
+    await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'a.jpg').expect(201);
+    list = (await http.get('/events').expect(200)).body;
+    await http.get(list[0].cover).expect(200);
+    await http.get(`/events/${priv.guestUrl.split('/e/')[1]}/cover`).expect(404);
+
+    // Lookup: email is case-insensitive, guest passcode must NOT work, client code returns all of that client's events
+    await http.post('/events/lookup').send({ email: 'cy@test.dev', code: 'GALA' }).expect(401);
+    await http.post('/events/lookup').send({ email: 'other@test.dev', code: pub.clientCode }).expect(401);
+    const found = (await http.post('/events/lookup').send({ email: ' CY@test.dev ', code: pub.clientCode.toLowerCase() }).expect(201)).body;
+    expect(found.map((e: { name: string }) => e.name).sort()).toEqual(['Open Gala', 'Private Party']);
+    expect(found.find((e: { name: string }) => e.name === 'Open Gala')).toMatchObject({ photoCount: 1, clientPath: pub.clientUrl.replace(/^.*(?=\/c\/)/, '') });
+
+    // Admin can unlist it again
+    await http.patch(`/admin/events/${pub.id}`).set('Authorization', admin).send({ isPublic: false }).expect(200);
+    expect((await http.get('/events').expect(200)).body).toEqual([]);
+  });
+
+  it('publishes past-event showcases independent of live events', async () => {
+    const http = request(app.getHttpServer());
+    const publicFiles = () => readdirSync(join(dataDir, 'uploads', 'public')).length;
+    await http.post('/admin/showcases').field('title', 'X').field('eventDate', '2026-01-01').expect(401);
+
+    const before = publicFiles();
+    await http.post('/admin/showcases').set('Authorization', admin).field('title', 'X').field('eventDate', 'nope').attach('photos', JPEG, 'a.jpg').expect(400);
+    expect(publicFiles()).toBe(before); // rejected upload leaves no orphan files
+
+    const created = (
+      await http
+        .post('/admin/showcases')
+        .set('Authorization', admin)
+        .field('title', 'Gala Night')
+        .field('eventDate', '2026-03-14')
+        .field('location', 'Manila Hotel')
+        .field('description', 'A night to remember.')
+        .attach('photos', JPEG, 'clip.mp4')
+        .attach('photos', JPEG, 'a.jpg')
+        .expect(201)
+    ).body;
+    expect(created.photos.map((p: { isVideo: boolean }) => p.isVideo)).toEqual([true, false]);
+
+    const list = (await http.get('/showcases').expect(200)).body;
+    expect(list).toEqual([expect.objectContaining({ title: 'Gala Night', location: 'Manila Hotel', photoCount: 2, cover: created.photos[1].url })]);
+    await http.get(created.photos[1].url).expect(200);
+
+    // Edit fields + append a photo, then remove one
+    const updated = (
+      await http.patch(`/admin/showcases/${created.id}`).set('Authorization', admin).field('title', 'Gala Night 2026').attach('photos', JPEG, 'b.png').expect(200)
+    ).body;
+    expect(updated).toMatchObject({ title: 'Gala Night 2026', location: 'Manila Hotel' });
+    expect(updated.photos).toHaveLength(3);
+    await http.delete(`/admin/showcases/${created.id}/photos/${created.photos[0].id}`).set('Authorization', admin).expect(200);
+    await http.get(created.photos[0].url).expect(404);
+    expect((await http.get(`/showcases/${created.id}`).expect(200)).body.photos).toHaveLength(2);
+
+    // Purging live events never touches showcases
+    app.get(EventsService).purgeExpired(new Date('2100-01-01'));
+    await http.get(`/showcases/${created.id}`).expect(200);
+
+    await http.delete(`/admin/showcases/${created.id}`).set('Authorization', admin).expect(200);
+    await http.get(`/showcases/${created.id}`).expect(404);
+    await http.get(updated.photos[2].url).expect(404);
+  });
+
+  it('lets the admin design the guest upload page per event', async () => {
+    const http = request(app.getHttpServer());
+    const event = (
+      await http.post('/admin/events').set('Authorization', admin).send({ name: 'Rose Gala', clientName: 'R', eventDate: new Date().toISOString().slice(0, 10) }).expect(201)
+    ).body;
+    const slug = event.guestUrl.split('/e/')[1];
+    expect((await http.get(`/guest/${slug}`).expect(200)).body.design).toEqual({ background: null });
+
+    await http.put(`/admin/events/${event.id}/design`).field('title', 'x').expect(401);
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('color', 'pink').expect(400);
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('panel', 'neon').expect(400);
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).attach('background', JPEG, 'clip.mp4').expect(400);
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('title', 'x'.repeat(81)).expect(400);
+
+    const saved = (
+      await http
+        .put(`/admin/events/${event.id}/design`)
+        .set('Authorization', admin)
+        .field('title', 'Welcome to the Gala')
+        .field('message', 'Share your mirror moments!')
+        .field('uploadMessage', 'Pick your favourites')
+        .field('dateText', 'Saturday, 23 October · Manila Hotel')
+        .field('hideDate', 'false')
+        .field('thanks', 'Thank you, darling')
+        .field('color', '#B5546F')
+        .field('panel', 'tint')
+        .attach('background', JPEG, 'bg.jpg')
+        .expect(200)
+    ).body;
+    expect(saved).toMatchObject({ title: 'Welcome to the Gala', uploadMessage: 'Pick your favourites', dateText: 'Saturday, 23 October · Manila Hotel', color: '#B5546F', panel: 'tint', background: expect.stringContaining(`/guest/${slug}/background?v=`) });
+    expect((await http.get(`/guest/${slug}`).expect(200)).body.design).toEqual(saved);
+    await http.get(saved.background).expect(200);
+
+    // PUT replaces the design: fields left out are cleared, and the background can be removed
+    const cleared = (
+      await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('message', 'Smile!').field('hideDate', 'true').field('removeBackground', 'true').expect(200)
+    ).body;
+    expect(cleared).toEqual({ message: 'Smile!', hideDate: true, background: null });
+    await http.get(`/guest/${slug}/background`).expect(404);
+  });
+
+  it('shows guests every note beside its photo only while the admin allows it', async () => {
+    const http = request(app.getHttpServer());
+    const event = (
+      await http.post('/admin/events').set('Authorization', admin).send({ name: 'Notes Party', clientName: 'N', eventDate: new Date().toISOString().slice(0, 10), passcode: 'notes' }).expect(201)
+    ).body;
+    const slug = event.guestUrl.split('/e/')[1];
+    const unlock = async (name: string) => (await http.post(`/guest/${slug}/unlock`).send({ name, passcode: 'notes' }).expect(201)).body.token as string;
+    const share = async (token: string, message: string) => {
+      const note = (await http.post(`/guest/${slug}/messages`).set('Authorization', `Bearer ${token}`).send({ message }).expect(201)).body;
+      await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${token}`).field('messageId', String(note.id)).attach('photos', JPEG, 'p.jpg').expect(201);
+    };
+    const wall = async (token: string) => (await http.get(`/guest/${slug}/wall`).set('Authorization', `Bearer ${token}`).expect(200)).body.photos;
+    const setNotes = (on: boolean) => http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('showMessages', String(on)).expect(200);
+    const [ana, ben] = [await unlock('Tita Ana'), await unlock('Ben')];
+
+    await share(ana, 'Written before the switch');
+    expect((await setNotes(true)).body.showMessages).toBe(true);
+    await share(ana, 'Congrats, you two!');
+    await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${ben}`).attach('photos', JPEG, 'c.jpg').expect(201);
+
+    const photos = await wall(ben);
+    expect(photos.map((p: { note?: unknown }) => p.note ?? null)).toEqual([
+      null,
+      { name: 'Tita Ana', body: 'Congrats, you two!' },
+      { name: 'Tita Ana', body: 'Written before the switch' },
+    ]);
+    expect((await http.get(`/guest/${slug}`).expect(200)).body.design.showMessages).toBe(true);
+
+    // Switching off hides every note again
+    expect((await setNotes(false)).body).not.toHaveProperty('showMessages');
+    expect(JSON.stringify(await wall(ben))).not.toMatch(/Congrats|Written before/);
+  });
+
+  it('shows guests a photo-only wall and keeps messages private to the client', async () => {
+    const http = request(app.getHttpServer());
+    const event = (
+      await http.post('/admin/events').set('Authorization', admin).send({ name: 'Wall Party', clientName: 'W', eventDate: new Date().toISOString().slice(0, 10), passcode: 'wall' }).expect(201)
+    ).body;
+    const slug = event.guestUrl.split('/e/')[1];
+    const clientToken = event.clientUrl.split('/c/')[1];
+    const unlock = async (name: string) => (await http.post(`/guest/${slug}/unlock`).send({ name, passcode: 'wall' }).expect(201)).body.token as string;
+    const [ana, ben] = [await unlock('Tita Ana'), await unlock('Ben')];
+
+    await http.get(`/guest/${slug}/wall`).expect(401);
+    await http.post(`/guest/${slug}/messages`).send({ message: 'hi' }).expect(401);
+    await http.post(`/guest/${slug}/messages`).set('Authorization', `Bearer ${ana}`).send({ message: '  ' }).expect(400);
+
+    // Ana leaves a note with two photos; Ben uploads one photo, no note
+    const note = (await http.post(`/guest/${slug}/messages`).set('Authorization', `Bearer ${ana}`).send({ name: 'Someone Else', message: 'Congrats, you two!' }).expect(201)).body;
+    await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${ana}`).field('messageId', String(note.id)).attach('photos', JPEG, 'a.jpg').attach('photos', JPEG, 'b.jpg').expect(201);
+    await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${ben}`).field('messageId', '999999').attach('photos', JPEG, 'x.jpg').expect(400);
+    await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${ben}`).attach('photos', JPEG, 'c.jpg').expect(201);
+
+    // Ben sees all three photos, and nothing but photos
+    const wall = (await http.get(`/guest/${slug}/wall`).set('Authorization', `Bearer ${ben}`).expect(200)).body;
+    expect(wall.enabled).toBe(true);
+    expect(wall.photos).toHaveLength(3);
+    expect(JSON.stringify(wall)).not.toMatch(/Ana|Ben|Congrats/);
+    expect(Object.keys(wall.photos[0]).sort()).toEqual(['createdAt', 'id', 'isVideo', 'mine', 'url']);
+    expect(wall.photos.map((p: { mine: boolean }) => p.mine)).toEqual([true, false, false]); // Ben's photo is newest
+    await http.get(wall.photos[0].url).expect(401);
+    await http.get(`${wall.photos[0].url}?t=${ben}`).expect(200);
+    // A token for another event can't read this wall's files
+    const other = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Other', clientName: 'O', eventDate: new Date().toISOString().slice(0, 10), passcode: 'other' })).body;
+    const otherToken = (await http.post(`/guest/${other.guestUrl.split('/e/')[1]}/unlock`).send({ name: 'Guest', passcode: 'other' })).body.token;
+    await http.get(`${wall.photos[0].url}?t=${otherToken}`).expect(401);
+
+    // The client sees the guestbook, with Ana's photos attached to her note
+    const gallery = (await http.get(`/client/${clientToken}`).expect(200)).body;
+    expect(gallery.messages).toEqual([expect.objectContaining({ name: 'Tita Ana', body: 'Congrats, you two!', photoIds: expect.arrayContaining([expect.any(Number)]) })]);
+    expect(gallery.messages[0].photoIds).toHaveLength(2);
+
+    // Admin can switch the wall off for privacy-minded clients
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('showWall', 'false').expect(200);
+    expect((await http.get(`/guest/${slug}/wall`).set('Authorization', `Bearer ${ben}`).expect(200)).body).toEqual({ enabled: false, photos: [] });
+    await http.get(`${wall.photos[0].url}?t=${ben}`).expect(404);
+    expect((await http.get(`/guest/${slug}`).expect(200)).body.design.showWall).toBe(false);
+  });
+
+  it('reschedules an event, moving its expiry, but never into the past', async () => {
+    const http = request(app.getHttpServer());
+    const event = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Moved', clientName: 'M', eventDate: '2099-01-10' }).expect(201)).body;
+    const patch = (body: object) => http.patch(`/admin/events/${event.id}`).set('Authorization', admin).send(body);
+
+    await patch({}).expect(400);
+    await patch({ eventDate: 'soon' }).expect(400);
+    await patch({ eventDate: '2000-01-01' }).expect(400); // would expire immediately
+    await patch({ eventDate: '2099-02-20' }).expect(200);
+
+    const updated = (await http.get('/admin/events').set('Authorization', admin)).body.find((e: { id: number }) => e.id === event.id);
+    expect(updated).toMatchObject({ eventDate: '2099-02-20', expiresAt: '2099-03-08T00:00:00.000Z', isPublic: false });
+    await patch({ isPublic: true }).expect(200); // listing toggle still works and keeps the date
+    expect((await http.get('/admin/events').set('Authorization', admin)).body.find((e: { id: number }) => e.id === event.id)).toMatchObject({ eventDate: '2099-02-20', isPublic: true });
+  });
+
+  it('requires a guest name and limits photos per guest name', async () => {
+    const http = request(app.getHttpServer());
+    const event = (
+      await http.post('/admin/events').set('Authorization', admin).send({ name: 'Limit Party', clientName: 'L', eventDate: new Date().toISOString().slice(0, 10), passcode: 'snap' }).expect(201)
+    ).body;
+    const slug = event.guestUrl.split('/e/')[1];
+    const clientToken = event.clientUrl.split('/c/')[1];
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', 'many').expect(400);
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '3').expect(200);
+
+    await http.post(`/guest/${slug}/unlock`).send({ passcode: 'snap' }).expect(400);
+    await http.post(`/guest/${slug}/unlock`).send({ name: '   ', passcode: 'snap' }).expect(400);
+    const first = (await http.post(`/guest/${slug}/unlock`).send({ name: '  Mia   Cruz ', passcode: 'snap' }).expect(201)).body;
+    expect(first).toMatchObject({ name: 'Mia Cruz', uploaded: 0, limit: 3 });
+    const mia = `Bearer ${first.token}`;
+
+    const up = (auth: string, n: number) => {
+      const req = http.post(`/guest/${slug}/photos`).set('Authorization', auth);
+      for (let i = 0; i < n; i++) req.attach('photos', JPEG, `p${i}.jpg`);
+      return req;
+    };
+    expect((await up(mia, 2).expect(201)).body).toMatchObject({ uploaded: 2, limit: 3, added: 2 });
+    expect((await up(mia, 2).expect(400)).body.message).toMatch(/1 more photo/);
+
+    // Same name in a fresh session (another phone, different capitalisation) shares the same allowance
+    const again = (await http.post(`/guest/${slug}/unlock`).send({ name: 'mia cruz', passcode: 'snap' }).expect(201)).body;
+    expect(again).toMatchObject({ uploaded: 2, limit: 3 });
+    await up(`Bearer ${again.token}`, 1).expect(201);
+    expect((await up(`Bearer ${again.token}`, 1).expect(400)).body.message).toMatch(/maximum of 3/);
+    expect((await http.get(`/guest/${slug}/me`).set('Authorization', mia).expect(200)).body).toEqual({ name: 'Mia Cruz', uploaded: 3, limit: 3 });
+
+    // Another guest has their own allowance; 0 means unlimited
+    const leo = `Bearer ${(await http.post(`/guest/${slug}/unlock`).send({ name: 'Leo', passcode: 'snap' })).body.token}`;
+    await up(leo, 3).expect(201);
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '0').expect(200);
+    expect((await up(leo, 2).expect(201)).body).toMatchObject({ uploaded: 5, limit: null });
+
+    // The client sees who shared each photo
+    const gallery = (await http.get(`/client/${clientToken}`).expect(200)).body;
+    expect(gallery.photos.map((p: { by: string }) => p.by).sort()).toEqual(['Leo', 'Leo', 'Leo', 'Leo', 'Leo', 'Mia Cruz', 'Mia Cruz', 'mia cruz']); // names kept as each session typed them
+  });
+});
