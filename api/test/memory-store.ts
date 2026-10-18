@@ -8,6 +8,11 @@ export class MemoryStore implements FileStore {
     return this.files.has(`${bucket}/${key}`);
   }
 
+  /** Keys in a bucket starting with `prefix`. */
+  keys(bucket: Bucket, prefix = '') {
+    return [...this.files.keys()].filter((k) => k.startsWith(`${bucket}/${prefix}`)).map((k) => k.slice(bucket.length + 1));
+  }
+
   async put(bucket: Bucket, key: string, body: Buffer, contentType: string) {
     this.files.set(`${bucket}/${key}`, { body, contentType });
   }

@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -18,8 +18,7 @@ const { FILE_STORE } = await import('../src/storage/file-store.js');
 const { MemoryStore } = await import('./memory-store.js');
 const { freshSchema } = await import('./pg-harness.js');
 const { setup } = await import('../src/main.js');
-const { Db } = await import('../src/db.js');
-const { EventsService, expiresAt } = await import('../src/events.js');
+const { expiresAt } = await import('../src/events.js');
 
 // smallest valid JPEG header is enough; the API only checks the extension
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
@@ -256,21 +255,27 @@ describe('Fae&Fable API', () => {
     await http.post(`/guest/${slug}/unlock`).send({ name: 'Guest', passcode: 'wrong' }).expect(401);
     const guest = `Bearer ${(await http.post(`/guest/${slug}/unlock`).send({ name: 'Guest', passcode: 'ABCD' }).expect(201)).body.token}`;
     await http.post(`/guest/${slug}/photos`).set('Authorization', admin).attach('photos', JPEG, 'a.jpg').expect(401);
-    await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'a.jpg').attach('photos', JPEG, 'b.png').expect(201);
+    // One photo per request (browsers resize first), so a request can't exceed the host's body limit
+    await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'a.jpg').attach('photos', JPEG, 'b.png').expect(400);
+    await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'a.jpg').expect(201);
+    await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'b.png').expect(201);
 
+    // Private photos: the API checks access, then redirects to a short-lived signed URL
     const gallery = (await http.get(`/client/${clientToken}`).expect(200)).body;
     expect(gallery.photos).toHaveLength(2);
-    await http.get(gallery.photos[0].url).expect(200);
-    await http.get(`${gallery.photos[0].url}?download=1`).expect('Content-Disposition', /attachment/);
+    expect(gallery.photos[0]).not.toHaveProperty('isVideo');
+    expect((await http.get(gallery.photos[0].url).expect(302)).headers.location).toMatch(/^memory:\/\/private\/events\/\d+\//);
+    expect((await http.get(`${gallery.photos[0].url}?download=1`).expect(302)).headers.location).toMatch(/download=Ana%20%26%20Ben-\d+\.(jpg|png)/);
 
-    // Expire it: links return 410, then the purge deletes the event and its files
-    const db = app.get(Db);
-    db.sql.prepare('UPDATE events SET expires_at = ? WHERE id = ?').run('2000-01-01T00:00:00.000Z', event.id);
+    // Expired links return 410; nothing is deleted until the admin says so
+    await http.patch(`/admin/events/${event.id}`).set('Authorization', admin).send({ eventDate: '2000-01-01' }).expect(200);
     await http.get(`/client/${clientToken}`).expect(410);
     await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'c.jpg').expect(410);
-    expect(app.get(EventsService).purgeExpired()).toBe(1);
+    const keys = store.keys('private', `events/${event.id}/`);
+    expect(keys).toHaveLength(2);
+    expect((await http.delete('/admin/events/expired').set('Authorization', admin).expect(200)).body).toEqual({ deleted: 1, photos: 2 });
     await http.get(`/client/${clientToken}`).expect(404);
-    expect(db.sql.prepare('SELECT COUNT(*) AS n FROM photos').get()).toEqual({ n: 0 });
+    expect(keys.some((k) => store.has('private', k))).toBe(false);
   });
 
   it('serves the public events page: opt-in listing, covers, client lookup', async () => {
@@ -292,7 +297,7 @@ describe('Fae&Fable API', () => {
     const guest = `Bearer ${(await http.post(`/guest/${slug}/unlock`).send({ name: 'Guest', passcode: 'gala' })).body.token}`;
     await http.post(`/guest/${slug}/photos`).set('Authorization', guest).attach('photos', JPEG, 'a.jpg').expect(201);
     list = (await http.get('/events').expect(200)).body;
-    await http.get(list[0].cover).expect(200);
+    expect((await http.get(list[0].cover).expect(302)).headers.location).toMatch(/^memory:\/\/private\/events\/\d+\//);
     await http.get(`/events/${priv.guestUrl.split('/e/')[1]}/cover`).expect(404);
 
     // Lookup: email is case-insensitive, guest passcode must NOT work, client code returns all of that client's events
@@ -376,16 +381,16 @@ describe('Fae&Fable API', () => {
         .attach('background', JPEG, 'bg.jpg')
         .expect(200)
     ).body;
-    expect(saved).toMatchObject({ title: 'Welcome to the Gala', uploadMessage: 'Pick your favourites', dateText: 'Saturday, 23 October · Manila Hotel', color: '#B5546F', panel: 'tint', background: expect.stringContaining(`/guest/${slug}/background?v=`) });
+    expect(saved).toMatchObject({ title: 'Welcome to the Gala', uploadMessage: 'Pick your favourites', dateText: 'Saturday, 23 October · Manila Hotel', color: '#B5546F', panel: 'tint', background: expect.stringMatching(/^backgrounds\/[\w-]+\.jpg$/) });
     expect((await http.get(`/guest/${slug}`).expect(200)).body.design).toEqual(saved);
-    await http.get(saved.background).expect(200);
+    expect(store.has('public', saved.background)).toBe(true);
 
     // PUT replaces the design: fields left out are cleared, and the background can be removed
     const cleared = (
       await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('message', 'Smile!').field('hideDate', 'true').field('removeBackground', 'true').expect(200)
     ).body;
     expect(cleared).toEqual({ message: 'Smile!', hideDate: true, background: null });
-    await http.get(`/guest/${slug}/background`).expect(404);
+    expect(store.has('public', saved.background)).toBe(false);
   });
 
   it('shows guests every note beside its photo only while the admin allows it', async () => {
@@ -437,7 +442,9 @@ describe('Fae&Fable API', () => {
 
     // Ana leaves a note with two photos; Ben uploads one photo, no note
     const note = (await http.post(`/guest/${slug}/messages`).set('Authorization', `Bearer ${ana}`).send({ name: 'Someone Else', message: 'Congrats, you two!' }).expect(201)).body;
-    await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${ana}`).field('messageId', String(note.id)).attach('photos', JPEG, 'a.jpg').attach('photos', JPEG, 'b.jpg').expect(201);
+    for (const name of ['a.jpg', 'b.jpg']) {
+      await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${ana}`).field('messageId', String(note.id)).attach('photos', JPEG, name).expect(201);
+    }
     await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${ben}`).field('messageId', '999999').attach('photos', JPEG, 'x.jpg').expect(400);
     await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${ben}`).attach('photos', JPEG, 'c.jpg').expect(201);
 
@@ -446,10 +453,10 @@ describe('Fae&Fable API', () => {
     expect(wall.enabled).toBe(true);
     expect(wall.photos).toHaveLength(3);
     expect(JSON.stringify(wall)).not.toMatch(/Ana|Ben|Congrats/);
-    expect(Object.keys(wall.photos[0]).sort()).toEqual(['createdAt', 'id', 'isVideo', 'mine', 'url']);
+    expect(Object.keys(wall.photos[0]).sort()).toEqual(['createdAt', 'id', 'mine', 'url']);
     expect(wall.photos.map((p: { mine: boolean }) => p.mine)).toEqual([true, false, false]); // Ben's photo is newest
     await http.get(wall.photos[0].url).expect(401);
-    await http.get(`${wall.photos[0].url}?t=${ben}`).expect(200);
+    expect((await http.get(`${wall.photos[0].url}?t=${ben}`).expect(302)).headers.location).toMatch(/^memory:\/\/private\/events\/\d+\//);
     // A token for another event can't read this wall's files
     const other = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Other', clientName: 'O', eventDate: new Date().toISOString().slice(0, 10), passcode: 'other' })).body;
     const otherToken = (await http.post(`/guest/${other.guestUrl.split('/e/')[1]}/unlock`).send({ name: 'Guest', passcode: 'other' })).body.token;
@@ -467,20 +474,72 @@ describe('Fae&Fable API', () => {
     expect((await http.get(`/guest/${slug}`).expect(200)).body.design.showWall).toBe(false);
   });
 
-  it('reschedules an event, moving its expiry, but never into the past', async () => {
+  it('reschedules or extends an event by moving its expiry with the date', async () => {
     const http = request(app.getHttpServer());
     const event = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Moved', clientName: 'M', eventDate: '2099-01-10' }).expect(201)).body;
     const patch = (body: object) => http.patch(`/admin/events/${event.id}`).set('Authorization', admin).send(body);
 
     await patch({}).expect(400);
     await patch({ eventDate: 'soon' }).expect(400);
-    await patch({ eventDate: '2000-01-01' }).expect(400); // would expire immediately
+    // A past date just leaves it expired (nothing is deleted); a later date brings its links back
+    await patch({ eventDate: '2000-01-01' }).expect(200);
+    const slug = event.guestUrl.split('/e/')[1];
+    expect((await http.get('/admin/events').set('Authorization', admin)).body.find((e: { id: number }) => e.id === event.id)).toMatchObject({ expired: true });
+    await http.get(`/guest/${slug}`).expect(410);
     await patch({ eventDate: '2099-02-20' }).expect(200);
+    await http.get(`/guest/${slug}`).expect(200);
 
     const updated = (await http.get('/admin/events').set('Authorization', admin)).body.find((e: { id: number }) => e.id === event.id);
     expect(updated).toMatchObject({ eventDate: '2099-02-20', expiresAt: '2099-03-08T00:00:00.000Z', isPublic: false });
     await patch({ isPublic: true }).expect(200); // listing toggle still works and keeps the date
     expect((await http.get('/admin/events').set('Authorization', admin)).body.find((e: { id: number }) => e.id === event.id)).toMatchObject({ eventDate: '2099-02-20', isPublic: true });
+  });
+
+  it('private photo routes redirect only after access checks', async () => {
+    const http = request(app.getHttpServer());
+    const today = new Date().toISOString().slice(0, 10);
+    const make = async (passcode: string) => {
+      const e = (await http.post('/admin/events').set('Authorization', admin).send({ name: `Ev ${passcode}`, clientName: 'C', eventDate: today, passcode }).expect(201)).body;
+      const slug = e.guestUrl.split('/e/')[1];
+      const token = (await http.post(`/guest/${slug}/unlock`).send({ name: 'G', passcode }).expect(201)).body.token as string;
+      await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${token}`).attach('photos', JPEG, 'p.jpg').expect(201);
+      const wall = (await http.get(`/guest/${slug}/wall`).set('Authorization', `Bearer ${token}`).expect(200)).body.photos;
+      return { e, slug, token, clientToken: e.clientUrl.split('/c/')[1] as string, photoUrl: wall[0].url as string, photoId: wall[0].id as number };
+    };
+    const a = await make('aaaa');
+    const b = await make('bbbb');
+
+    await http.get(a.photoUrl).expect(401);
+    await http.get(`${a.photoUrl}?t=${b.token}`).expect(401); // another event's guest
+    await http.get(`/guest/${b.slug}/photos/${a.photoId}?t=${b.token}`).expect(404); // another event's photo id
+    await http.get(`/client/${b.clientToken}/photos/${a.photoId}`).expect(404);
+    expect((await http.get(`${a.photoUrl}?t=${a.token}`).expect(302)).headers['cache-control']).toMatch(/private/);
+
+    await http.patch(`/admin/events/${a.e.id}`).set('Authorization', admin).send({ eventDate: '2000-01-01' }).expect(200);
+    await http.get(`${a.photoUrl}?t=${a.token}`).expect(410);
+    await http.get(`/client/${a.clientToken}/photos/${a.photoId}`).expect(410);
+    await http.delete('/admin/events/expired').set('Authorization', admin).expect(200);
+  });
+
+  it('deleting expired events removes their files and leaves live events alone', async () => {
+    const http = request(app.getHttpServer());
+    const today = new Date().toISOString().slice(0, 10);
+    const old = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Old', clientName: 'O', eventDate: today, passcode: 'oldy' }).expect(201)).body;
+    const live = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Live', clientName: 'L', eventDate: today, passcode: 'live' }).expect(201)).body;
+    const slug = old.guestUrl.split('/e/')[1];
+    const background = (await http.put(`/admin/events/${old.id}/design`).set('Authorization', admin).attach('background', JPEG, 'bg.jpg').expect(200)).body.background as string;
+    const token = (await http.post(`/guest/${slug}/unlock`).send({ name: 'G', passcode: 'oldy' }).expect(201)).body.token;
+    for (const n of ['1.jpg', '2.jpg']) await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${token}`).attach('photos', JPEG, n).expect(201);
+    const photoKeys = store.keys('private', `events/${old.id}/`);
+    expect(photoKeys).toHaveLength(2);
+
+    await http.delete('/admin/events/expired').expect(401);
+    await http.patch(`/admin/events/${old.id}`).set('Authorization', admin).send({ eventDate: '2000-01-01' }).expect(200);
+    expect((await http.delete('/admin/events/expired').set('Authorization', admin).expect(200)).body).toEqual({ deleted: 1, photos: 2 });
+    expect(photoKeys.some((k) => store.has('private', k))).toBe(false);
+    expect(store.has('public', background)).toBe(false);
+    await http.get(`/guest/${live.guestUrl.split('/e/')[1]}`).expect(200);
+    expect((await http.delete('/admin/events/expired').set('Authorization', admin).expect(200)).body).toEqual({ deleted: 0, photos: 0 });
   });
 
   it('requires a guest name and limits photos per guest name', async () => {
@@ -499,26 +558,24 @@ describe('Fae&Fable API', () => {
     expect(first).toMatchObject({ name: 'Mia Cruz', uploaded: 0, limit: 3 });
     const mia = `Bearer ${first.token}`;
 
-    const up = (auth: string, n: number) => {
-      const req = http.post(`/guest/${slug}/photos`).set('Authorization', auth);
-      for (let i = 0; i < n; i++) req.attach('photos', JPEG, `p${i}.jpg`);
-      return req;
-    };
-    expect((await up(mia, 2).expect(201)).body).toMatchObject({ uploaded: 2, limit: 3, added: 2 });
-    expect((await up(mia, 2).expect(400)).body.message).toMatch(/1 more photo/);
+    const up = (auth: string) => http.post(`/guest/${slug}/photos`).set('Authorization', auth).attach('photos', JPEG, 'p.jpg');
+    await up(mia).expect(201);
+    expect((await up(mia).expect(201)).body).toMatchObject({ uploaded: 2, limit: 3, added: 1 });
 
     // Same name in a fresh session (another phone, different capitalisation) shares the same allowance
     const again = (await http.post(`/guest/${slug}/unlock`).send({ name: 'mia cruz', passcode: 'snap' }).expect(201)).body;
     expect(again).toMatchObject({ uploaded: 2, limit: 3 });
-    await up(`Bearer ${again.token}`, 1).expect(201);
-    expect((await up(`Bearer ${again.token}`, 1).expect(400)).body.message).toMatch(/maximum of 3/);
+    await up(`Bearer ${again.token}`).expect(201);
+    expect((await up(`Bearer ${again.token}`).expect(400)).body.message).toMatch(/maximum of 3/);
     expect((await http.get(`/guest/${slug}/me`).set('Authorization', mia).expect(200)).body).toEqual({ name: 'Mia Cruz', uploaded: 3, limit: 3 });
 
     // Another guest has their own allowance; 0 means unlimited
     const leo = `Bearer ${(await http.post(`/guest/${slug}/unlock`).send({ name: 'Leo', passcode: 'snap' })).body.token}`;
-    await up(leo, 3).expect(201);
+    for (let i = 0; i < 3; i++) await up(leo).expect(201);
+    await up(leo).expect(400);
     await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '0').expect(200);
-    expect((await up(leo, 2).expect(201)).body).toMatchObject({ uploaded: 5, limit: null });
+    await up(leo).expect(201);
+    expect((await up(leo).expect(201)).body).toMatchObject({ uploaded: 5, limit: null });
 
     // The client sees who shared each photo
     const gallery = (await http.get(`/client/${clientToken}`).expect(200)).body;
