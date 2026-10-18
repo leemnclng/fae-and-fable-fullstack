@@ -1,0 +1,10 @@
+# OS / editor
+.DS_Store
+
+# Local agent scratch (mockups, run logs)
+.superpowers/
+
+# Python bytecode from .claude skills
+__pycache__/
+
+# Per-app ignores (node_modules, .next, .env, data, dist) live in api/.gitignore and web/.gitignore
