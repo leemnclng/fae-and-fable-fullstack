@@ -1,15 +1,11 @@
 import { BadRequestException, Body, Controller, Delete, Get, Inject, Put, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { join } from 'node:path';
 import { AdminGuard } from './auth.js';
 import { cleanupFiles } from './catalog/files.js';
-import { config } from './config.js';
 import { Pg } from './pg.js';
 import { FILE_STORE, newKey, type FileStore } from './storage/file-store.js';
 import { extOf, imageUpload } from './uploads.js';
 
-// shortcut: showcases still read files from disk here until they move to the FileStore
-export const PUBLIC_DIR = join(config.uploadsDir, 'public');
 // Catalog page JSON lives in settings too, but only the catalog endpoints may expose it.
 export const HIDDEN_SETTINGS = ['catalogDraft', 'catalogPublished'];
 const SETTING_KEYS = ['businessName', 'tagline', 'about', 'email', 'phone', 'instagram', 'location'];

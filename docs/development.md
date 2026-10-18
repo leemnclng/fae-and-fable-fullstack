@@ -4,13 +4,13 @@
 
 Run commands from the Fae-Fable root unless stated otherwise.
 
-Prerequisites: Node.js with `node:sqlite` support (the runner checks for Node 22.13+), npm, and pnpm for the API.
+Prerequisites: Node.js 22+, npm, pnpm for the API, and a Postgres + Supabase Storage to point at. Locally this is the Supabase stack TPC-Space already runs (`supabase start`, Postgres on `127.0.0.1:54322`, API on `127.0.0.1:54321`). Fae&Fable keeps to its own schema (`fae_fable`) and buckets (`fae-fable-public`, `fae-fable-private`), so the two apps never see each other's data.
 
 ```bash
 ./scripts/run.sh
 ```
 
-The runner installs missing dependencies, installs pnpm if absent, creates missing environment files, and starts both services. Ctrl+C stops both.
+The runner installs missing dependencies, creates missing env files, runs `pnpm db:migrate`, and starts both services. Ctrl+C stops both.
 
 | Service | Local URL | Package manager |
 | --- | --- | --- |
@@ -22,14 +22,26 @@ On first setup, edit the admin email/password in `api/.env` before sharing acces
 
 ## Configuration
 
-Use `api/.env.example` and `web/.env.example` as the configuration templates.
+Use `api/.env.example` and `web/.env.example` as the templates; they document every variable. Production values go in the host's environment settings (for example, Vercel project settings), never in git.
 
 | File | Variables |
 | --- | --- |
-| `api/.env` | `PORT`, `WEB_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `DATA_DIR` |
-| `web/.env.local` | `NEXT_PUBLIC_API_URL` |
+| `api/.env` | `PORT`, `WEB_URL` (comma-separated allowed site addresses; the first is used in links), `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `DATABASE_URL`, `DB_SCHEMA`, `STORAGE_DRIVER` (`supabase` or `s3`), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, bucket names, `S3_*` |
+| `web/.env.local` | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_FILES_URL` (public bucket base URL) |
 
-The API requires `JWT_SECRET`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`. `DATA_DIR` defaults to `data`, relative to the API working directory. Keep actual secrets out of documentation.
+- **Locally,** copy `DATABASE_URL`, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` from `TPC-Space/apps/api/.env`, or from `supabase status -o env`.
+- **In production,** use the dedicated Supabase project's pooled connection string.
+- The service-role key and S3 secrets are API-only; never put them in a `NEXT_PUBLIC_*` variable.
+
+## Database
+
+Schema changes are numbered SQL files in `api/migrations/`; every table name is written `$s.<table>` and runs inside `DB_SCHEMA`.
+
+```bash
+cd api && pnpm db:migrate   # applies pending migrations and creates the storage buckets
+```
+
+Migrations never run when the API starts. Run them locally, and as a release step before deploying a new API version.
 
 ## Checks
 
@@ -37,6 +49,7 @@ From `api/`:
 
 ```bash
 pnpm lint
+pnpm test        # unit tests + storage contract tests (Supabase/S3 suites run only when their credentials are set)
 pnpm test:e2e
 pnpm build
 ```
@@ -48,7 +61,20 @@ npm run lint
 npm run build
 ```
 
-The API end-to-end suite in `api/test/app.e2e-spec.ts` creates a temporary data directory and removes it on teardown. Passing API checks does not establish that browser flows have been tested.
+The API tests need the local Postgres. Each run creates a throwaway `fae_fable_test_*` schema and drops it afterwards, and the e2e suite keeps files in memory. Passing API checks does not establish that browser flows have been tested.
+
+## Deployment
+
+**Vercel:** two projects from this repo.
+- **Website:** Root Directory `web`. Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_FILES_URL`.
+- **API:** Root Directory `api`. Vercel's NestJS support runs `src/main.ts` as one function. Set every `api/.env` variable, with `WEB_URL` = the website's address(es).
+- **Each release:** run `pnpm db:migrate` against production.
+- **Uploads:** browsers resize photos to ≤2560 px and send one per request, so each request stays under Vercel's ~4.5 MB body limit. The API refuses files over 4 MB.
+
+**Docker:** `api/Dockerfile` and `web/Dockerfile` build standalone images, and `docker-compose.yml` runs both.
+- `NEXT_PUBLIC_*` values are build arguments.
+- Inside a container, reach the host's local Supabase via `host.docker.internal` (or `host.containers.internal` under Podman).
+- Run migrations with `docker run --env-file api/.env fae-fable-api node dist/migrate-cli.js`.
 
 ## UI Conventions
 
@@ -60,10 +86,10 @@ The API end-to-end suite in `api/test/app.e2e-spec.ts` creates a temporary data 
 
 ## Data and Retention
 
-- Default database: `api/data/app.db`.
-- Default file storage: `api/data/uploads/`.
-- Back up the database and uploaded files together; use persistent storage when deploying.
-- Live events and their uploads expire after the configured retention window; see [functionality-map.md](context/functionality-map.md) for the exact boundary.
-- Past-event showcases are stored separately from expiring live events.
+- **Database:** Postgres, in the `DB_SCHEMA` schema.
+- **Files:** object storage. The public bucket holds catalog, showcase, banner and guest-page background images, linked directly. The private bucket holds guest event photos, served only through short-lived signed URLs after the API's access checks.
+- **Back up** the database and both buckets together.
+- **Retention:** guest and client links stop working 15 days after the event (see [functionality-map.md](context/functionality-map.md)). Nothing is deleted automatically: the admin deletes expired events (and their files) from the admin page, or extends them with a later date.
+- **Past-event showcases** are stored separately from live events.
 
 Update [app context](context/README.md) alongside meaningful application changes.

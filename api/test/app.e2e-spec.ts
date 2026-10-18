@@ -1,14 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
-const dataDir = mkdtempSync(join(tmpdir(), 'fae-fable-'));
 Object.assign(process.env, {
-  DATA_DIR: dataDir,
   JWT_SECRET: 'test-secret',
+  // Several web origins (e.g. production + a preview deployment); the first is used in generated links
+  WEB_URL: 'http://a.test,http://b.test',
   ADMIN_EMAIL: 'admin@test.dev',
   ADMIN_PASSWORD: 'pw',
 });
@@ -45,12 +42,18 @@ describe('Fae&Fable API', () => {
   afterAll(async () => {
     await app.close();
     await schema.drop();
-    rmSync(dataDir, { recursive: true, force: true });
   });
 
   it('expiresAt keeps links open through the 15th day after the event', () => {
     expect(expiresAt('2026-01-01')).toBe('2026-01-17T00:00:00.000Z');
     expect(() => expiresAt('01/01/2026')).toThrow();
+  });
+
+  it('CORS allows each configured web origin and nothing else', async () => {
+    const http = request(app.getHttpServer());
+    expect((await http.get('/content').set('Origin', 'http://b.test')).headers['access-control-allow-origin']).toBe('http://b.test');
+    expect((await http.get('/content').set('Origin', 'http://c.test')).headers['access-control-allow-origin']).toBeUndefined();
+    expect((await http.get('/').expect(200)).body).toEqual({ ok: true });
   });
 
   it('rejects bad logins and unauthenticated admin calls', async () => {

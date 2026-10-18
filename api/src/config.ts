@@ -1,5 +1,3 @@
-import { join } from 'node:path';
-
 try {
   process.loadEnvFile();
 } catch {
@@ -12,11 +10,13 @@ function required(name: string): string {
   return value;
 }
 
-const dataDir = process.env.DATA_DIR ?? 'data';
+// Comma-separated so a preview deployment can be allowed next to production; the first one is used in generated links.
+const webUrls = (process.env.WEB_URL ?? 'http://localhost:3000').split(',').map((u) => u.trim().replace(/\/$/, '')).filter(Boolean);
 
 export const config = {
   port: Number(process.env.PORT ?? 4000),
-  webUrl: process.env.WEB_URL ?? 'http://localhost:3000',
+  webUrl: webUrls[0],
+  webUrls,
   jwtSecret: required('JWT_SECRET'),
   adminEmail: required('ADMIN_EMAIL'),
   adminPassword: required('ADMIN_PASSWORD'),
@@ -37,8 +37,6 @@ export const config = {
       publicUrl: process.env.S3_PUBLIC_URL ?? '',
     },
   },
-  dataDir,
-  uploadsDir: join(dataDir, 'uploads'),
   retentionDays: 15,
 };
 

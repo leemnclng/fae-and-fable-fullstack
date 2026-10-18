@@ -1,0 +1,21 @@
+# Runs both apps from source. Database and storage stay external (Supabase or Postgres + S3), configured in api/.env.
+# Inside containers 127.0.0.1 is the container itself: for the local Supabase stack use host.docker.internal
+# (or host.containers.internal under Podman) in DATABASE_URL and SUPABASE_URL.
+services:
+  api:
+    build: ./api
+    env_file: ./api/.env
+    environment:
+      PORT: "4000"
+    ports:
+      - "4000:4000"
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+        NEXT_PUBLIC_FILES_URL: ${NEXT_PUBLIC_FILES_URL:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api

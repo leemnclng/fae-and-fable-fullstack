@@ -1,12 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'node:path';
 import { AppModule } from './app.module.js';
 import { config } from './config.js';
 
 export function setup(app: NestExpressApplication) {
-  app.enableCors({ origin: config.webUrl });
-  app.useStaticAssets(join(config.uploadsDir, 'public'), { prefix: '/files/', maxAge: '7d' });
+  app.enableCors({ origin: config.webUrls });
   app.enableShutdownHooks();
   return app;
 }

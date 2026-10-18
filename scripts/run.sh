@@ -10,14 +10,14 @@ cd "$ROOT_DIR"
 echo "== Fae&Fable — starting dev (api + web) =="
 echo
 
-# --- Node.js / npm (node:sqlite needs Node 22.13+) ---
+# --- Node.js / npm (Node 22+) ---
 if ! command -v node >/dev/null 2>&1; then
-  echo "Node.js is required (v22.13+) and wasn't found on PATH." >&2
+  echo "Node.js is required (v22+) and wasn't found on PATH." >&2
   echo "Install it from https://nodejs.org/ and re-run this script." >&2
   exit 1
 fi
-if ! node -e "require('node:sqlite')" >/dev/null 2>&1; then
-  echo "Node $(node --version) is too old: the API needs node:sqlite (Node 22.13+)." >&2
+if [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 22 ]; then
+  echo "Node $(node --version) is too old: Fae&Fable needs Node 22+." >&2
   exit 1
 fi
 if ! command -v npm >/dev/null 2>&1; then
@@ -40,6 +40,10 @@ if [ ! -f api/.env ]; then
   echo "Created api/.env — admin login is admin@example.com / change-me (edit api/.env to change)."
 fi
 [ -f web/.env.local ] || cp web/.env.example web/.env.local
+if ! grep -qE '^DATABASE_URL=.+' api/.env; then
+  echo "api/.env has no DATABASE_URL. Point it at Postgres (the local Supabase stack works; see docs/development.md)." >&2
+  exit 1
+fi
 
 # --- dependencies (first run only) ---
 if [ ! -d api/node_modules ]; then
@@ -52,6 +56,10 @@ if [ ! -d web/node_modules ]; then
   echo "Installing web dependencies (first run only)..."
   (cd web && npm install)
 fi
+
+# --- database schema (safe to repeat: only pending migrations run) ---
+echo
+(cd api && pnpm db:migrate)
 
 # Kill a process and all its descendants (nest/next spawn child servers that outlive their parent).
 kill_tree() {
