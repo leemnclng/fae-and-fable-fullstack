@@ -20,6 +20,7 @@ export const config = {
   jwtSecret: required('JWT_SECRET'),
   adminEmail: required('ADMIN_EMAIL'),
   adminPassword: required('ADMIN_PASSWORD'),
+  databaseUrl: required('DATABASE_URL'),
   dataDir,
   uploadsDir: join(dataDir, 'uploads'),
   retentionDays: 15,

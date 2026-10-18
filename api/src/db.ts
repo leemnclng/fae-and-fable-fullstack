@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { config } from './config.js';
+import { Pg } from './pg.js';
 
 export const SCHEMA = `
 PRAGMA foreign_keys = ON;
@@ -104,5 +105,5 @@ export class Db implements OnModuleDestroy {
 }
 
 @Global()
-@Module({ providers: [Db], exports: [Db] })
+@Module({ providers: [Db, Pg], exports: [Db, Pg] })
 export class DbModule {}
