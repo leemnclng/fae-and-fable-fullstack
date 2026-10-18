@@ -32,8 +32,8 @@ import QRCode from 'qrcode';
 import { AdminGuard, bearer, safeEqual, TokenPayload } from './auth.js';
 import { config } from './config.js';
 import { Pg } from './pg.js';
-import { FILE_STORE, newKey, type FileStore } from './storage/file-store.js';
-import { extOf, imageUpload } from './uploads.js';
+import { FILE_STORE, newKey, removeInBatches, type FileStore } from './storage/file-store.js';
+import { contentTypeOf, extOf, imageUpload } from './uploads.js';
 
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I so codes are easy to read off a sign
 
@@ -113,13 +113,16 @@ export class EventsService {
     @Inject(FILE_STORE) private readonly store: FileStore,
   ) {}
 
-  /** Deletes an event, its rows and every stored file; returns how many photos it held. Only ever triggered by the admin. */
+  /**
+   * Deletes an event's stored files, then its rows; returns how many photos it held. Only ever triggered by the admin.
+   * Files go first so a storage failure leaves the event listed (still pointing at its files) and the delete can be retried.
+   */
   async remove(event: EventRow) {
     const photos = await this.photos(event.id);
-    await this.pg.exec('DELETE FROM $s.events WHERE id = ?', [event.id]);
-    await this.store.remove('private', photos.map((p) => p.file));
+    await removeInBatches(this.store, 'private', photos.map((p) => p.file));
     const background = parseDesign(event).background;
     if (background) await this.store.remove('public', [background]);
+    await this.pg.exec('DELETE FROM $s.events WHERE id = ?', [event.id]);
     return photos.length;
   }
 
@@ -276,7 +279,7 @@ export class AdminEventsController {
     if (file || body.removeBackground === 'true') design.background = undefined;
     if (file) {
       design.background = `backgrounds/${newKey(extOf(file))}`;
-      await this.store.put('public', design.background, file.buffer, file.mimetype);
+      await this.store.put('public', design.background, file.buffer, contentTypeOf(file));
     }
     await this.pg.exec('UPDATE $s.events SET design = ?::jsonb WHERE id = ?', [JSON.stringify(design), id]);
     if (old && old !== design.background) await this.store.remove('public', [old]);
@@ -387,7 +390,7 @@ export class GuestController {
     }
     for (const file of files) {
       const key = `events/${event.id}/${newKey(extOf(file))}`;
-      await this.store.put('private', key, file.buffer, file.mimetype);
+      await this.store.put('private', key, file.buffer, contentTypeOf(file));
       await this.pg.exec('INSERT INTO $s.photos (event_id, file, message_id, guest_name) VALUES (?, ?, ?, ?)', [event.id, key, messageId, req.guestName!]);
     }
     return { ...(await this.events.quota(event, req.guestName!)), added: files.length };

@@ -545,6 +545,36 @@ describe('Fae&Fable API', () => {
     expect((await http.delete('/admin/events/expired').set('Authorization', admin).expect(200)).body).toEqual({ deleted: 0, photos: 0 });
   });
 
+  it('keeps an event listed when its files could not be deleted, so the delete can be retried', async () => {
+    const http = request(app.getHttpServer());
+    const ev = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Retry', clientName: 'R', eventDate: new Date().toISOString().slice(0, 10), passcode: 'rtry' }).expect(201)).body;
+    const slug = ev.guestUrl.split('/e/')[1];
+    const token = (await http.post(`/guest/${slug}/unlock`).send({ name: 'G', passcode: 'rtry' }).expect(201)).body.token;
+    for (const n of ['1.jpg', '2.jpg', '3.jpg']) await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${token}`).attach('photos', JPEG, n).expect(201);
+    const keys = store.keys('private', `events/${ev.id}/`);
+
+    store.failNextRemove = true;
+    await http.delete(`/admin/events/${ev.id}`).set('Authorization', admin).expect(500);
+    await http.get(`/guest/${slug}`).expect(200); // still there, files still referenced
+    expect(keys.every((k) => store.has('private', k))).toBe(true);
+
+    await http.delete(`/admin/events/${ev.id}`).set('Authorization', admin).expect(200);
+    expect(keys.some((k) => store.has('private', k))).toBe(false);
+  });
+
+  it('stores uploads with the content type of their extension, never the one the client claims', async () => {
+    const http = request(app.getHttpServer());
+    const ev = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Mime', clientName: 'M', eventDate: new Date().toISOString().slice(0, 10), passcode: 'mime' }).expect(201)).body;
+    const slug = ev.guestUrl.split('/e/')[1];
+    const token = (await http.post(`/guest/${slug}/unlock`).send({ name: 'G', passcode: 'mime' }).expect(201)).body.token;
+    await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${token}`).attach('photos', JPEG, { filename: 'evil.jpg', contentType: 'text/html' }).expect(201);
+    const [key] = store.keys('private', `events/${ev.id}/`);
+    expect(store.contentType('private', key)).toBe('image/jpeg');
+    const file = (await http.post('/admin/catalog/uploads').set('Authorization', admin).attach('image', JPEG, { filename: 'x.png', contentType: 'image/svg+xml' }).expect(201)).body.file;
+    expect(store.contentType('public', file)).toBe('image/png');
+    await http.delete(`/admin/events/${ev.id}`).set('Authorization', admin).expect(200);
+  });
+
   it('requires a guest name and limits photos per guest name', async () => {
     const http = request(app.getHttpServer());
     const event = (

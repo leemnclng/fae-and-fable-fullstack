@@ -8,6 +8,16 @@ export class MemoryStore implements FileStore {
     return this.files.has(`${bucket}/${key}`);
   }
 
+  /** Content type a file was stored with. */
+  contentType(bucket: Bucket, key: string) {
+    return this.files.get(`${bucket}/${key}`)?.contentType;
+  }
+
+  /** Makes the next remove() call fail, to test that callers don't lose track of files. */
+  failNextRemove = false;
+  /** Real services cap bulk deletes (S3: 1000 keys); callers must stay under it. */
+  maxRemoveBatch = 1000;
+
   /** Keys in a bucket starting with `prefix`. */
   keys(bucket: Bucket, prefix = '') {
     return [...this.files.keys()].filter((k) => k.startsWith(`${bucket}/${prefix}`)).map((k) => k.slice(bucket.length + 1));
@@ -18,6 +28,11 @@ export class MemoryStore implements FileStore {
   }
 
   async remove(bucket: Bucket, keys: string[]) {
+    if (this.failNextRemove) {
+      this.failNextRemove = false;
+      throw new Error('storage unavailable');
+    }
+    if (keys.length > this.maxRemoveBatch) throw new Error(`remove() called with ${keys.length} keys; the cap is ${this.maxRemoveBatch}`);
     for (const key of keys) this.files.delete(`${bucket}/${key}`);
   }
 

@@ -4,7 +4,7 @@ import { AdminGuard } from './auth.js';
 import { cleanupFiles } from './catalog/files.js';
 import { Pg } from './pg.js';
 import { FILE_STORE, newKey, type FileStore } from './storage/file-store.js';
-import { extOf, imageUpload } from './uploads.js';
+import { contentTypeOf, extOf, imageUpload } from './uploads.js';
 
 // Catalog page JSON lives in settings too, but only the catalog endpoints may expose it.
 export const HIDDEN_SETTINGS = ['catalogDraft', 'catalogPublished'];
@@ -30,7 +30,7 @@ export class ContentController {
   async saveBanner(@UploadedFile() image?: Express.Multer.File) {
     if (!image) throw new BadRequestException('image is required');
     const key = newKey(extOf(image));
-    await this.store.put('public', key, image.buffer, image.mimetype);
+    await this.store.put('public', key, image.buffer, contentTypeOf(image));
     await this.removeBanner();
     await this.pg.exec("INSERT INTO $s.settings (key, value) VALUES ('banner', ?)", [key]);
     return this.settings();

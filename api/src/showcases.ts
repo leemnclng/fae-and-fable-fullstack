@@ -17,8 +17,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AdminGuard } from './auth.js';
 import { Pg } from './pg.js';
-import { FILE_STORE, newKey, type FileStore } from './storage/file-store.js';
-import { extOf, imageUpload } from './uploads.js';
+import { FILE_STORE, newKey, removeInBatches, type FileStore } from './storage/file-store.js';
+import { contentTypeOf, extOf, imageUpload } from './uploads.js';
 
 /**
  * Past events: showcase posts the admin publishes for the public.
@@ -96,7 +96,7 @@ export class ShowcasesController {
     await this.find(id);
     if (!photo) throw new BadRequestException('photo is required');
     const file = newKey(extOf(photo));
-    await this.store.put('public', file, photo.buffer, photo.mimetype);
+    await this.store.put('public', file, photo.buffer, contentTypeOf(photo));
     await this.pg.exec(
       'INSERT INTO $s.showcase_photos (showcase_id, file, sort) VALUES (?, ?, (SELECT COALESCE(MAX(sort), -1) + 1 FROM $s.showcase_photos WHERE showcase_id = ?))',
       [id, file, id],
@@ -109,8 +109,9 @@ export class ShowcasesController {
   async remove(@Param('id', ParseIntPipe) id: number) {
     await this.find(id);
     const files = await this.pg.query<{ file: string }>('SELECT file FROM $s.showcase_photos WHERE showcase_id = ?', [id]);
+    // Files first: if storage fails the showcase stays listed and the delete can be retried
+    await removeInBatches(this.store, 'public', files.map((f) => f.file));
     await this.pg.exec('DELETE FROM $s.showcases WHERE id = ?', [id]);
-    await this.store.remove('public', files.map((f) => f.file));
     return { ok: true };
   }
 

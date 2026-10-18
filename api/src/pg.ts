@@ -42,6 +42,9 @@ export class Pg implements OnModuleDestroy {
     if (!IDENT.test(this.schema)) throw new Error(`DB_SCHEMA must be a plain lowercase identifier, got "${this.schema}"`);
     // Small pool: serverless instances each hold their own, and the Supabase pooler sits in front
     this.pool = new pg.Pool({ connectionString: config.databaseUrl, max: 5 });
+    // Dropped idle connections (pooler restarts, network blips) arrive here; unhandled they would crash the process.
+    // The pool replaces the client on the next query, so logging is enough.
+    this.pool.on('error', (e) => console.error('Postgres pool error:', e.message));
   }
 
   query<T>(sql: string, params?: unknown[]): Promise<T[]> {

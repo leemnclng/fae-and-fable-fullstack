@@ -28,7 +28,10 @@ export class S3Store implements FileStore {
 
   async remove(bucket: Bucket, keys: string[]) {
     if (!keys.length) return;
-    await this.client.send(new DeleteObjectsCommand({ Bucket: this.buckets[bucket], Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true } }));
+    const { Errors } = await this.client.send(
+      new DeleteObjectsCommand({ Bucket: this.buckets[bucket], Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true } }),
+    );
+    if (Errors?.length) throw new Error(`Delete failed for ${Errors.length} file(s): ${Errors[0].Key} (${Errors[0].Code})`);
   }
 
   publicUrl(key: string) {

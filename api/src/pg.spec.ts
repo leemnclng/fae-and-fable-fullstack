@@ -21,3 +21,11 @@ it('refuses schema names that are not plain identifiers', async () => {
     process.env.DB_SCHEMA = old;
   }
 });
+
+it('survives connection errors reported by idle pool clients', async () => {
+  const { Pg } = await import('./pg.js');
+  const pg = new Pg();
+  // node-postgres emits 'error' on the pool when the server drops an idle connection; unhandled, that crashes the process
+  expect(() => (pg as unknown as { pool: import('node:events').EventEmitter }).pool.emit('error', new Error('connection terminated'))).not.toThrow();
+  await pg.onModuleDestroy();
+});

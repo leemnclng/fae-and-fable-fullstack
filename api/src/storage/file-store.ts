@@ -20,5 +20,10 @@ export interface FileStore {
 
 export const FILE_STORE = Symbol('FILE_STORE');
 
+/** Storage services cap bulk deletes (S3 DeleteObjects: 1000 keys), so large removals go in batches. */
+export async function removeInBatches(store: FileStore, bucket: Bucket, keys: string[], size = 1000) {
+  for (let i = 0; i < keys.length; i += size) await store.remove(bucket, keys.slice(i, i + size));
+}
+
 /** A fresh, unguessable object name keeping the upload's (lower-cased) extension. */
 export const newKey = (ext: string) => `${randomUUID()}${ext.toLowerCase()}`;

@@ -23,3 +23,16 @@ export function imageUpload() {
 
 /** Lower-cased extension of an uploaded file's original name, e.g. ".jpg". */
 export const extOf = (file: Express.Multer.File) => extname(file.originalname).toLowerCase();
+
+const MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+};
+
+/** Content type to store, from the (allow-listed) extension. Never the client's claim, which could say text/html. */
+export const contentTypeOf = (file: Express.Multer.File) => MIME[extOf(file)] ?? 'application/octet-stream';

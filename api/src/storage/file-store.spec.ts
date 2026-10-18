@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { MemoryStore } from '../../test/memory-store.js';
 import { config } from '../config.js';
-import { newKey, type FileStore } from './file-store.js';
+import { newKey, removeInBatches, type FileStore } from './file-store.js';
 import { S3Store } from './s3-store.js';
 import { SupabaseStore } from './supabase-store.js';
 
@@ -56,4 +56,14 @@ describe.each(drivers)('%s store', (name, make, real) => {
     await expect(store.remove('public', [])).resolves.toBeUndefined();
     await expect(store.remove('private', [prefix + 'never-uploaded.jpg'])).resolves.toBeUndefined();
   });
+});
+
+it('removes large sets of files in batches under the service cap', async () => {
+  const store = new MemoryStore();
+  store.maxRemoveBatch = 2;
+  const keys = ['a', 'b', 'c', 'd', 'e'].map((k) => `${k}.jpg`);
+  for (const k of keys) await store.put('private', k, JPEG, 'image/jpeg');
+  await expect(store.remove('private', keys)).rejects.toThrow(/cap/);
+  await removeInBatches(store, 'private', keys, 2);
+  expect(keys.some((k) => store.has('private', k))).toBe(false);
 });

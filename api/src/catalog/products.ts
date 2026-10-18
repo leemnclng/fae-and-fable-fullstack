@@ -18,7 +18,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { AdminGuard } from '../auth.js';
 import { Pg } from '../pg.js';
 import { FILE_STORE, newKey, type FileStore } from '../storage/file-store.js';
-import { extOf, imageUpload } from '../uploads.js';
+import { contentTypeOf, extOf, imageUpload } from '../uploads.js';
 import { cleanupFiles } from './files.js';
 import { IMAGE_NAME, isObj, str } from './sections.js';
 
@@ -162,7 +162,7 @@ export class ProductsController {
   async upload(@UploadedFile() image?: Express.Multer.File) {
     if (!image) throw new BadRequestException('image is required');
     const file = newKey(extOf(image));
-    await this.store.put('public', file, image.buffer, image.mimetype);
+    await this.store.put('public', file, image.buffer, contentTypeOf(image));
     return { file };
   }
 
