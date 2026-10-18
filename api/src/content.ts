@@ -1,22 +1,14 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Put,
-  UploadedFile,
-  UseGuards,
-  UseInterceptors,
-} from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Inject, Put, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { join } from 'node:path';
 import { AdminGuard } from './auth.js';
-import { config } from './config.js';
-import { Db } from './db.js';
 import { cleanupFiles } from './catalog/files.js';
-import { IMAGES_ONLY, uploadOptions } from './uploads.js';
+import { config } from './config.js';
+import { Pg } from './pg.js';
+import { FILE_STORE, newKey, type FileStore } from './storage/file-store.js';
+import { extOf, imageUpload } from './uploads.js';
 
+// shortcut: showcases still read files from disk here until they move to the FileStore
 export const PUBLIC_DIR = join(config.uploadsDir, 'public');
 // Catalog page JSON lives in settings too, but only the catalog endpoints may expose it.
 export const HIDDEN_SETTINGS = ['catalogDraft', 'catalogPublished'];
@@ -24,52 +16,56 @@ const SETTING_KEYS = ['businessName', 'tagline', 'about', 'email', 'phone', 'ins
 
 @Controller()
 export class ContentController {
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly pg: Pg,
+    @Inject(FILE_STORE) private readonly store: FileStore,
+  ) {}
 
+  /** Public site settings. `banner` is a file name in the public bucket. */
   @Get('content')
-  list() {
-    const settings = this.settings();
-    if (settings.banner) settings.banner = `/files/${settings.banner}`;
-    return { settings };
+  async list() {
+    return { settings: await this.settings() };
   }
 
   /** Homepage banner photo, kept in settings by file name; replaces any previous one. */
   @Put('admin/banner')
   @UseGuards(AdminGuard)
-  @UseInterceptors(FileInterceptor('image', uploadOptions(() => PUBLIC_DIR, 15, IMAGES_ONLY)))
-  saveBanner(@UploadedFile() image?: Express.Multer.File) {
+  @UseInterceptors(FileInterceptor('image', imageUpload()))
+  async saveBanner(@UploadedFile() image?: Express.Multer.File) {
     if (!image) throw new BadRequestException('image is required');
-    this.removeBanner();
-    this.db.sql.prepare("INSERT INTO settings (key, value) VALUES ('banner', ?)").run(image.filename);
-    return this.list().settings;
+    const key = newKey(extOf(image));
+    await this.store.put('public', key, image.buffer, image.mimetype);
+    await this.removeBanner();
+    await this.pg.exec("INSERT INTO $s.settings (key, value) VALUES ('banner', ?)", [key]);
+    return this.settings();
   }
 
   @Delete('admin/banner')
   @UseGuards(AdminGuard)
-  deleteBanner() {
-    this.removeBanner();
-    return this.list().settings;
-  }
-
-  private settings() {
-    const rows = this.db.sql.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
-    return Object.fromEntries(rows.filter((r) => !HIDDEN_SETTINGS.includes(r.key)).map((r) => [r.key, r.value])) as Record<string, string>;
-  }
-
-  private removeBanner() {
-    const banner = this.settings().banner;
-    this.db.sql.prepare("DELETE FROM settings WHERE key = 'banner'").run();
-    // The catalog page may still show the old banner (its default slideshow uses it), so only delete it when unused
-    if (banner) cleanupFiles(this.db, [banner]);
+  async deleteBanner() {
+    await this.removeBanner();
+    return this.settings();
   }
 
   @Put('admin/settings')
   @UseGuards(AdminGuard)
-  saveSettings(@Body() body: Record<string, unknown>) {
-    const upsert = this.db.sql.prepare(
-      'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-    );
-    for (const key of SETTING_KEYS) if (typeof body[key] === 'string') upsert.run(key, body[key]);
-    return this.list().settings;
+  async saveSettings(@Body() body: Record<string, unknown>) {
+    for (const key of SETTING_KEYS) {
+      if (typeof body[key] !== 'string') continue;
+      await this.pg.exec('INSERT INTO $s.settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', [key, body[key]]);
+    }
+    return this.settings();
+  }
+
+  private async settings() {
+    const rows = await this.pg.query<{ key: string; value: string }>('SELECT key, value FROM $s.settings');
+    return Object.fromEntries(rows.filter((r) => !HIDDEN_SETTINGS.includes(r.key)).map((r) => [r.key, r.value])) as Record<string, string>;
+  }
+
+  private async removeBanner() {
+    const banner = (await this.settings()).banner;
+    await this.pg.exec("DELETE FROM $s.settings WHERE key = 'banner'");
+    // The catalog page may still show the old banner (its default slideshow uses it), so only delete it when unused
+    if (banner) await cleanupFiles(this.pg, this.store, [banner]);
   }
 }

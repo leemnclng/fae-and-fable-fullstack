@@ -14,6 +14,9 @@ Object.assign(process.env, {
 });
 
 const { AppModule } = await import('../src/app.module.js');
+const { FILE_STORE } = await import('../src/storage/file-store.js');
+const { MemoryStore } = await import('./memory-store.js');
+const { freshSchema } = await import('./pg-harness.js');
 const { setup } = await import('../src/main.js');
 const { Db } = await import('../src/db.js');
 const { EventsService, expiresAt } = await import('../src/events.js');
@@ -24,9 +27,13 @@ const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 describe('Fae&Fable API', () => {
   let app: NestExpressApplication;
   let admin: string;
+  let schema: Awaited<ReturnType<typeof freshSchema>>;
+  const store = new MemoryStore();
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    // A throwaway Postgres schema for this run, and files kept in memory
+    schema = await freshSchema();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(FILE_STORE).useValue(store).compile();
     app = setup(moduleRef.createNestApplication<NestExpressApplication>());
     await app.init();
     const res = await request(app.getHttpServer())
@@ -38,6 +45,7 @@ describe('Fae&Fable API', () => {
 
   afterAll(async () => {
     await app.close();
+    await schema.drop();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -63,14 +71,18 @@ describe('Fae&Fable API', () => {
 
     // Banner: replacing deletes the old file, removing clears it; settings PUT can't set it
     const first = (await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'a.jpg').expect(200)).body.banner;
-    expect(first).toMatch(/^\/files\/.+\.jpg$/);
+    expect(first).toMatch(/^[\w-]+\.jpg$/);
+    expect(store.has('public', first)).toBe(true);
     const second = (await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'b.jpg').expect(200)).body.banner;
-    await http.get(first).expect(404);
+    expect(store.has('public', first)).toBe(false);
     await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'clip.mp4').expect(400);
+    // Uploads are resized in the browser; anything over 4 MB is refused
+    const big = (await http.put('/admin/banner').set('Authorization', admin).attach('image', Buffer.alloc(5 * 1024 * 1024), 'big.jpg')).status;
+    expect([400, 413]).toContain(big);
     await http.put('/admin/settings').set('Authorization', admin).send({ banner: 'x.jpg' }).expect(200);
     expect((await http.get('/content').expect(200)).body.settings.banner).toBe(second);
     await http.delete('/admin/banner').set('Authorization', admin).expect(200);
-    await http.get(second).expect(404);
+    expect(store.has('public', second)).toBe(false);
     expect((await http.get('/content').expect(200)).body.settings).not.toHaveProperty('banner');
     await http.put('/admin/banner').expect(401);
   });
@@ -123,9 +135,9 @@ describe('Fae&Fable API', () => {
       const p = (await create({ name: 'Photo mirror', photos: [file] }).expect(201)).body;
       await act(p.id, 'publish').expect(201);
       await save(p.id, { name: 'Photo mirror', photos: [] }).expect(200);
-      await http.get(`/files/${file}`).expect(200);
+      expect(store.has('public', file)).toBe(true);
       await act(p.id, 'publish').expect(201);
-      await http.get(`/files/${file}`).expect(404);
+      expect(store.has('public', file)).toBe(false);
     });
 
     it('orders and deletes products', async () => {
@@ -206,11 +218,11 @@ describe('Fae&Fable API', () => {
     it('keeps an old banner photo the catalog page still shows', async () => {
       const http = request(app.getHttpServer());
       // The default page's slideshow uses the banner, so a published page can hold the banner's file name
-      const file = (await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'old.jpg').expect(200)).body.banner.replace('/files/', '');
+      const file = (await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'old.jpg').expect(200)).body.banner as string;
       await savePage([{ id: 's', type: 'slideshow', slides: [{ image: file }] }]).expect(200);
       await publishPage();
       await http.put('/admin/banner').set('Authorization', admin).attach('image', JPEG, 'new.jpg').expect(200);
-      await http.get(`/files/${file}`).expect(200);
+      expect(store.has('public', file)).toBe(true);
       await http.delete('/admin/banner').set('Authorization', admin).expect(200);
     });
 
@@ -220,9 +232,9 @@ describe('Fae&Fable API', () => {
       await savePage([{ id: 't', type: 'text', image: file }]).expect(200);
       await publishPage();
       await savePage([]).expect(200);
-      await http.get(`/files/${file}`).expect(200);
+      expect(store.has('public', file)).toBe(true);
       await publishPage();
-      await http.get(`/files/${file}`).expect(404);
+      expect(store.has('public', file)).toBe(false);
     });
   });
 

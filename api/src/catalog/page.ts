@@ -1,6 +1,7 @@
-import { BadRequestException, Body, Controller, Get, Post, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, Post, Put, UseGuards } from '@nestjs/common';
 import { AdminGuard } from '../auth.js';
-import { Db } from '../db.js';
+import { Pg } from '../pg.js';
+import { FILE_STORE, type FileStore } from '../storage/file-store.js';
 import { cleanupFiles } from './files.js';
 import { publicProducts } from './products.js';
 import { defaultPage, filesInPage, sanitizePage, type Section } from './sections.js';
@@ -11,13 +12,16 @@ const PUBLISHED = 'catalogPublished';
 /** The catalog page: a draft the admin edits and a published copy visitors see, both stored as JSON in settings. */
 @Controller()
 export class CatalogPageController {
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly pg: Pg,
+    @Inject(FILE_STORE) private readonly store: FileStore,
+  ) {}
 
   @Get('catalog')
-  publicPage() {
-    const products = publicProducts(this.db);
+  async publicPage() {
+    const products = await publicProducts(this.pg);
     const live = new Set(products.map((p) => p.id));
-    const sections = (this.read(PUBLISHED) ?? defaultPage(this.banner()))
+    const sections = ((await this.read(PUBLISHED)) ?? defaultPage(await this.banner()))
       .filter((s) => !s.hidden)
       .map((s) => (s.type === 'products' && s.pick !== 'all' ? { ...s, pick: s.pick.filter((id) => live.has(id)) } : s));
     return { sections, products };
@@ -25,53 +29,51 @@ export class CatalogPageController {
 
   @Get('admin/catalog/page')
   @UseGuards(AdminGuard)
-  get() {
-    const draft = this.read(DRAFT) ?? defaultPage(this.banner());
-    const published = this.read(PUBLISHED);
+  async get() {
+    const draft = (await this.read(DRAFT)) ?? defaultPage(await this.banner());
+    const published = await this.read(PUBLISHED);
     return { draft, published, hasChanges: JSON.stringify(draft) !== JSON.stringify(published) };
   }
 
   @Put('admin/catalog/page')
   @UseGuards(AdminGuard)
-  save(@Body() body: { sections?: unknown }) {
-    const old = this.get().draft;
-    this.write(DRAFT, sanitizePage(body.sections));
-    cleanupFiles(this.db, filesInPage(old));
+  async save(@Body() body: { sections?: unknown }) {
+    const old = (await this.get()).draft;
+    await this.write(DRAFT, sanitizePage(body.sections));
+    await cleanupFiles(this.pg, this.store, filesInPage(old));
     return this.get();
   }
 
   @Post('admin/catalog/page/publish')
   @UseGuards(AdminGuard)
-  publish() {
-    const { draft, published } = this.get();
-    this.write(DRAFT, draft);
-    this.write(PUBLISHED, draft);
-    cleanupFiles(this.db, filesInPage(published ?? []));
+  async publish() {
+    const { draft, published } = await this.get();
+    await this.write(DRAFT, draft);
+    await this.write(PUBLISHED, draft);
+    await cleanupFiles(this.pg, this.store, filesInPage(published ?? []));
     return this.get();
   }
 
   @Post('admin/catalog/page/discard')
   @UseGuards(AdminGuard)
-  discard() {
-    const { draft, published } = this.get();
+  async discard() {
+    const { draft, published } = await this.get();
     if (!published) throw new BadRequestException('The catalog page has never been published');
-    this.write(DRAFT, published);
-    cleanupFiles(this.db, filesInPage(draft));
+    await this.write(DRAFT, published);
+    await cleanupFiles(this.pg, this.store, filesInPage(draft));
     return this.get();
   }
 
-  private read(key: string): Section[] | null {
-    const row = this.db.sql.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  private async read(key: string): Promise<Section[] | null> {
+    const row = await this.pg.one<{ value: string }>('SELECT value FROM $s.settings WHERE key = ?', [key]);
     return row ? (JSON.parse(row.value) as Section[]) : null;
   }
 
-  private write(key: string, sections: Section[]) {
-    this.db.sql
-      .prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-      .run(key, JSON.stringify(sections));
+  private async write(key: string, sections: Section[]) {
+    await this.pg.exec('INSERT INTO $s.settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', [key, JSON.stringify(sections)]);
   }
 
-  private banner() {
-    return (this.db.sql.prepare("SELECT value FROM settings WHERE key = 'banner'").get() as { value: string } | undefined)?.value ?? null;
+  private async banner() {
+    return (await this.pg.one<{ value: string }>("SELECT value FROM $s.settings WHERE key = 'banner'"))?.value ?? null;
   }
 }
