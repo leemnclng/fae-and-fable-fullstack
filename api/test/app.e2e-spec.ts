@@ -307,50 +307,44 @@ describe('Fae&Fable API', () => {
     expect((await http.get('/events').expect(200)).body).toEqual([]);
   });
 
-  it('publishes past-event showcases independent of live events', async () => {
+  it('publishes past-event showcases, photos only, one photo per upload', async () => {
     const http = request(app.getHttpServer());
-    const publicFiles = () => readdirSync(join(dataDir, 'uploads', 'public')).length;
-    await http.post('/admin/showcases').field('title', 'X').field('eventDate', '2026-01-01').expect(401);
-
-    const before = publicFiles();
-    await http.post('/admin/showcases').set('Authorization', admin).field('title', 'X').field('eventDate', 'nope').attach('photos', JPEG, 'a.jpg').expect(400);
-    expect(publicFiles()).toBe(before); // rejected upload leaves no orphan files
+    await http.post('/admin/showcases').send({ title: 'X', eventDate: '2026-01-01' }).expect(401);
+    await http.post('/admin/showcases').set('Authorization', admin).send({ title: 'X', eventDate: 'nope' }).expect(400);
 
     const created = (
       await http
         .post('/admin/showcases')
         .set('Authorization', admin)
-        .field('title', 'Gala Night')
-        .field('eventDate', '2026-03-14')
-        .field('location', 'Manila Hotel')
-        .field('description', 'A night to remember.')
-        .attach('photos', JPEG, 'clip.mp4')
-        .attach('photos', JPEG, 'a.jpg')
+        .send({ title: 'Gala Night', eventDate: '2026-03-14', location: 'Manila Hotel', description: 'A night to remember.' })
         .expect(201)
     ).body;
-    expect(created.photos.map((p: { isVideo: boolean }) => p.isVideo)).toEqual([true, false]);
+    expect(created.photos).toEqual([]);
+    const addPhoto = (name: string) => http.post(`/admin/showcases/${created.id}/photos`).set('Authorization', admin).attach('photo', JPEG, name);
+    await addPhoto('clip.mp4').expect(400);
+    await addPhoto('a.jpg').expect(201);
+    const withPhotos = (await addPhoto('b.png').expect(201)).body;
+    expect(withPhotos.photos).toHaveLength(2);
+    expect(Object.keys(withPhotos.photos[0]).sort()).toEqual(['file', 'id']);
+    const [first, second] = withPhotos.photos as { id: number; file: string }[];
+    expect(store.has('public', first.file) && store.has('public', second.file)).toBe(true);
 
     const list = (await http.get('/showcases').expect(200)).body;
-    expect(list).toEqual([expect.objectContaining({ title: 'Gala Night', location: 'Manila Hotel', photoCount: 2, cover: created.photos[1].url })]);
-    await http.get(created.photos[1].url).expect(200);
+    expect(list).toEqual([expect.objectContaining({ title: 'Gala Night', location: 'Manila Hotel', photoCount: 2, cover: first.file })]);
 
-    // Edit fields + append a photo, then remove one
-    const updated = (
-      await http.patch(`/admin/showcases/${created.id}`).set('Authorization', admin).field('title', 'Gala Night 2026').attach('photos', JPEG, 'b.png').expect(200)
-    ).body;
-    expect(updated).toMatchObject({ title: 'Gala Night 2026', location: 'Manila Hotel' });
-    expect(updated.photos).toHaveLength(3);
-    await http.delete(`/admin/showcases/${created.id}/photos/${created.photos[0].id}`).set('Authorization', admin).expect(200);
-    await http.get(created.photos[0].url).expect(404);
-    expect((await http.get(`/showcases/${created.id}`).expect(200)).body.photos).toHaveLength(2);
+    // Edit fields, then remove one photo
+    expect((await http.patch(`/admin/showcases/${created.id}`).set('Authorization', admin).send({ title: 'Gala Night 2026' }).expect(200)).body).toMatchObject({
+      title: 'Gala Night 2026',
+      location: 'Manila Hotel',
+    });
+    await http.delete(`/admin/showcases/${created.id}/photos/${first.id}`).set('Authorization', admin).expect(200);
+    expect(store.has('public', first.file)).toBe(false);
+    expect((await http.get(`/showcases/${created.id}`).expect(200)).body.photos).toHaveLength(1);
 
-    // Purging live events never touches showcases
-    app.get(EventsService).purgeExpired(new Date('2100-01-01'));
-    await http.get(`/showcases/${created.id}`).expect(200);
-
+    // Deleting the showcase removes its remaining files
     await http.delete(`/admin/showcases/${created.id}`).set('Authorization', admin).expect(200);
     await http.get(`/showcases/${created.id}`).expect(404);
-    await http.get(updated.photos[2].url).expect(404);
+    expect(store.has('public', second.file)).toBe(false);
   });
 
   it('lets the admin design the guest upload page per event', async () => {
