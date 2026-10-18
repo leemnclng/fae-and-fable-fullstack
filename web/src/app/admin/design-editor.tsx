@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { GuestView, PANELS, type GuestStep } from "@/components/guest-view";
-import { API, formatDate, type EventItem, type GuestDesign, type PanelStyle } from "@/lib/api";
+import { fileUrl, formatDate, type EventItem, type GuestDesign, type PanelStyle } from "@/lib/api";
+import { resizeImage } from "@/lib/resize";
 
 const STEPS: { key: GuestStep; label: string }[] = [
   { key: "passcode", label: "Passcode" },
@@ -31,7 +32,7 @@ export function DesignEditor({
   const [thanks, setThanks] = useState(event.design.thanks ?? "");
   const [color, setColor] = useState(event.design.color ?? "#f4c2c2");
   const [bgFile, setBgFile] = useState<File | null>(null);
-  const [bgPreview, setBgPreview] = useState(event.design.background ? API + event.design.background : null);
+  const [bgPreview, setBgPreview] = useState(event.design.background ? fileUrl(event.design.background) : null);
   const [removeBg, setRemoveBg] = useState(false);
   const [showWall, setShowWall] = useState(event.design.showWall !== false);
   const [showMessages, setShowMessages] = useState(!!event.design.showMessages);
@@ -52,13 +53,13 @@ export function DesignEditor({
   async function submit() {
     const form = new FormData();
     Object.entries({ photoLimit, title, dateText, hideDate: String(hideDate), message, uploadMessage, thanks, color, showWall: String(showWall), panel, showMessages: String(showWall && showMessages) }).forEach(([k, v]) => form.set(k, v));
-    if (bgFile) form.set("background", bgFile);
+    if (bgFile) form.set("background", await resizeImage(bgFile).catch(() => bgFile));
     else if (removeBg) form.set("removeBackground", "true");
     setSaving(true);
     setStatus("");
     try {
       const saved = await save(form);
-      setBgPreview(saved.background ? API + saved.background : null);
+      setBgPreview(saved.background ? fileUrl(saved.background) : null);
       setBgFile(null);
       setRemoveBg(false);
       setStatus("Saved. Guests see the new design now.");
@@ -296,6 +297,7 @@ export function DesignEditor({
                     onProgress(p);
                     await sleep(80);
                   }
+                  return { failed: [] };
                 }}
               />
             </div>

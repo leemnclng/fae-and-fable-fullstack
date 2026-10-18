@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { API, api, formatDate, type PublicEvent, type Showcase, type SiteContent } from "@/lib/api";
+import { API, api, fileUrl, formatDate, type PublicEvent, type Showcase, type SiteContent } from "@/lib/api";
 import { Eyebrow, GUTTER, SiteChrome } from "./chrome";
 import { LookupForm } from "./lookup-form";
 import { Icon } from "@/components/icon";
@@ -169,7 +169,7 @@ function JumpLink({ href, label, count }: { href: string; label: string; count?:
 function Cover({ showcase, sizes }: { showcase: Showcase; sizes?: "large" }) {
   return showcase.cover ? (
     <img
-      src={API + showcase.cover}
+      src={fileUrl(showcase.cover)}
       alt=""
       loading={sizes === "large" ? "eager" : "lazy"}
       className="h-full w-full object-cover transition duration-700 group-hover:scale-105 motion-reduce:transition-none"

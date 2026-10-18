@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { API, api, ApiError, formatDate, type ShowcaseDetail, type SiteContent } from "@/lib/api";
+import { api, ApiError, fileUrl, formatDate, type ShowcaseDetail, type SiteContent } from "@/lib/api";
 import { Eyebrow, GUTTER, SiteChrome } from "../chrome";
 import { Gallery } from "@/components/gallery";
 import { Icon } from "@/components/icon";
@@ -25,15 +25,15 @@ async function PastEvent({ params }: { params: Promise<{ id: string }> }) {
     }),
   ]);
   const name = content.settings.businessName || "Fae&Fable";
-  const cover = show.photos.find((p) => !p.isVideo);
-  const photos = show.photos.map((p) => ({ ...p, url: API + p.url }));
+  const cover = show.photos[0];
+  const photos = show.photos.map((p) => ({ id: p.id, url: fileUrl(p.file) }));
 
   return (
     <SiteChrome name={name} heroHasImage={!!cover}>
       <section id="top" className="relative flex h-[85svh] min-h-[28rem] items-end overflow-hidden bg-accent">
         {cover && (
           <>
-            <img src={API + cover.url} alt="" className="absolute inset-0 h-full w-full object-cover" />
+            <img src={fileUrl(cover.file)} alt="" className="absolute inset-0 h-full w-full object-cover" />
             <div className="absolute inset-0 bg-linear-to-t from-black/60 via-black/15 to-transparent" />
           </>
         )}

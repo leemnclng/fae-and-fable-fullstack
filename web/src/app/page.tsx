@@ -1,5 +1,5 @@
 import { Suspense, type ReactNode } from "react";
-import { API, api, type SiteContent } from "@/lib/api";
+import { api, fileUrl, type SiteContent } from "@/lib/api";
 import { FloatingNav } from "./floating-nav";
 
 export default function Home() {
@@ -42,7 +42,7 @@ async function Site() {
         {hero && (
           <>
             <img
-              src={API + hero}
+              src={fileUrl(hero)}
               alt=""
               className="absolute inset-0 h-full w-full object-cover"
             />

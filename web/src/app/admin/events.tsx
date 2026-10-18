@@ -32,6 +32,16 @@ export function Events(props: AdminProps) {
     reload();
   }
 
+  const live = events?.filter((e) => !e.expired) ?? [];
+  const expired = events?.filter((e) => e.expired) ?? [];
+  const expiredPhotos = expired.reduce((n, e) => n + e.photoCount, 0);
+
+  async function removeExpired() {
+    if (!confirm(`Delete ${expired.length} expired ${expired.length === 1 ? "event" : "events"} and their ${expiredPhotos} photos? This cannot be undone.`)) return;
+    await call("/admin/events/expired", { method: "DELETE" }).catch(() => {});
+    reload();
+  }
+
   async function remove(event: EventItem) {
     if (!confirm(`Delete "${event.name}" and all ${event.photoCount} uploaded photos? This cannot be undone.`)) return;
     await call(`/admin/events/${event.id}`, { method: "DELETE" }).catch(() => {});
@@ -54,14 +64,15 @@ export function Events(props: AdminProps) {
           <input name="isPublic" type="checkbox" value="true" className="h-4 w-4 accent-accent-ink" />
           List on the public Events page
         </label>
-        <p className="text-xs text-stone-500">Links and photos are deleted automatically 15 days after the event date.</p>
+        <p className="text-xs text-stone-500">Guest and client links stop working 15 days after the event date. Photos stay until you delete the event.</p>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button disabled={saving} className="btn w-full">{saving ? "Creating…" : "Create links"}</button>
       </form>
 
+      <div className="space-y-8">
       <div className="grid gap-4 2xl:grid-cols-2">
         {events?.length === 0 && <p className="text-stone-500">No events yet.</p>}
-        {events?.map((event) => (
+        {live.map((event) => (
           <article key={event.id} className="card flex flex-col gap-5 sm:flex-row">
             <div className="shrink-0 text-center">
               <img src={event.qr} alt={`Guest QR for ${event.name}`} className="h-40 w-40 rounded-lg border border-stone-200" />
@@ -103,6 +114,35 @@ export function Events(props: AdminProps) {
           </article>
         ))}
       </div>
+
+      {expired.length > 0 && (
+        <section aria-labelledby="expired-title" className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 id="expired-title" className="font-display text-xl">Expired</h2>
+              <p className="text-sm text-stone-500">Their links no longer work. Delete them to free up storage, or move the date later to bring the links back.</p>
+            </div>
+            <button onClick={removeExpired} className="btn-ghost text-red-600">
+              Delete all expired ({expiredPhotos} {expiredPhotos === 1 ? "photo" : "photos"})
+            </button>
+          </div>
+          <ul className="divide-y divide-stone-200 rounded-2xl border border-stone-200 bg-white">
+            {expired.map((event) => (
+              <li key={event.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
+                <div className="min-w-0">
+                  <p className="font-medium">{event.name}</p>
+                  <p className="text-stone-500">
+                    {event.clientName} · {event.photoCount} {event.photoCount === 1 ? "photo" : "photos"} · expired {formatDate(event.expiresAt)}
+                  </p>
+                  <Reschedule event={event} label="Extend" onSave={(date) => reschedule(event, date)} />
+                </div>
+                <button onClick={() => remove(event)} className="btn-ghost text-red-600">Delete</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      </div>
       {designing && (
         <DesignEditor
           event={designing}
@@ -119,7 +159,7 @@ export function Events(props: AdminProps) {
 }
 
 /** Shows the event date with an inline date picker to move it; links expire 15 days after the new date. */
-function Reschedule({ event, onSave }: { event: EventItem; onSave: (date: string) => Promise<void> }) {
+function Reschedule({ event, onSave, label = "Reschedule" }: { event: EventItem; onSave: (date: string) => Promise<void>; label?: string }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -129,7 +169,7 @@ function Reschedule({ event, onSave }: { event: EventItem; onSave: (date: string
       <p className="mt-1 flex flex-wrap items-center gap-2 text-stone-600">
         Event date: <span className="font-medium text-foreground">{formatDate(event.eventDate)}</span>
         <button type="button" onClick={() => setEditing(true)} className="cursor-pointer text-xs text-accent-ink underline underline-offset-2">
-          Reschedule
+          {label}
         </button>
       </p>
     );

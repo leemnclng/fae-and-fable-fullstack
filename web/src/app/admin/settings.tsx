@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { API, type Settings, type SiteContent } from "@/lib/api";
+import { fileUrl, type Settings, type SiteContent } from "@/lib/api";
 import { useAdmin, type AdminProps } from "./use-admin";
+import { resizeImage } from "@/lib/resize";
 
 const FIELDS: { key: keyof Settings; label: string; multiline?: boolean }[] = [
   { key: "businessName", label: "Business name" },
@@ -31,7 +32,8 @@ export function SettingsForm(props: AdminProps) {
 
   async function banner(file: File | null) {
     const form = new FormData();
-    if (file) form.set("image", file);
+    // If the browser can't shrink it, send it as is and let the API's size limit explain
+    if (file) form.set("image", await resizeImage(file).catch(() => file));
     try {
       await call("/admin/banner", file ? { method: "PUT", body: form } : { method: "DELETE" });
       await reload();
@@ -52,7 +54,7 @@ export function SettingsForm(props: AdminProps) {
         </div>
         <div className="flex flex-wrap items-center gap-4">
           <div className="aspect-video w-64 overflow-hidden rounded-lg border border-stone-200 bg-accent">
-            {current && <img src={API + current} alt="Current homepage banner" className="h-full w-full object-cover" />}
+            {current && <img src={fileUrl(current)} alt="Current homepage banner" className="h-full w-full object-cover" />}
           </div>
           <div className="flex flex-wrap gap-2">
             <label className="btn-ghost cursor-pointer">

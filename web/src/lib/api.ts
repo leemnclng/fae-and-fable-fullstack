@@ -20,14 +20,17 @@ export async function api<T>(path: string, { token, ...init }: RequestInit & { t
 }
 
 export type Settings = Partial<Record<"businessName" | "tagline" | "about" | "email" | "phone" | "instagram" | "location", string>> & {
-  /** Homepage banner photo URL (path under API), set via its own upload. */
+  /** Homepage banner photo: a file name in the public bucket (render with fileUrl). */
   banner?: string;
 };
 
 export type SiteContent = { settings: Settings };
 
-/** Public URL of an uploaded file stored by bare name (catalog photos). */
-export const fileUrl = (name: string) => `${API}/files/${name}`;
+/** Base URL of the public storage bucket, e.g. http://127.0.0.1:54321/storage/v1/object/public/fae-fable-public */
+const FILES_URL = (process.env.NEXT_PUBLIC_FILES_URL ?? "").replace(/\/$/, "");
+
+/** Public URL of an uploaded file stored by name: catalog, showcase, banner and guest-page background images. */
+export const fileUrl = (name: string) => `${FILES_URL}/${name}`;
 
 // Catalog: mirrors api/src/catalog/{sections,products}.ts
 export type Background = { background: "white" | "tint" | "photo"; backgroundImage: string | null };
@@ -68,6 +71,8 @@ export type EventItem = {
   clientEmail: string | null;
   eventDate: string;
   expiresAt: string;
+  /** Links stopped working; the admin can delete it or extend it with a later date. */
+  expired: boolean;
   passcode: string;
   clientCode: string | null;
   isPublic: boolean;
@@ -107,12 +112,14 @@ export type PublicEvent = { name: string; eventDate: string; slug: string; cover
 
 export type ClientEvent = { name: string; eventDate: string; expiresAt: string; photoCount: number; clientPath: string };
 
-export type ShowcasePhoto = { id: number; url: string; isVideo: boolean };
+/** A showcase photo; `file` is a name in the public bucket. */
+export type ShowcasePhoto = { id: number; file: string };
 
 /** A photo on the guest wall: anonymous, but flags the viewer's own uploads. */
 /** A guest's note shown beside their photo (only when the admin allows notes on the wall). */
 export type PhotoNote = { name: string; body: string };
-export type WallPhoto = ShowcasePhoto & { mine?: boolean; createdAt?: string; /** shared in the last few minutes */ fresh?: boolean; note?: PhotoNote };
+/** A guest photo on the wall; `url` is the API route that checks access and redirects to the photo. */
+export type WallPhoto = { id: number; url: string } & { mine?: boolean; createdAt?: string; /** shared in the last few minutes */ fresh?: boolean; note?: PhotoNote };
 
 export type Showcase = {
   id: number;
@@ -120,6 +127,7 @@ export type Showcase = {
   eventDate: string;
   location: string;
   description: string;
+  /** File name of the first photo in the public bucket. */
   cover: string | null;
   photoCount: number;
 };

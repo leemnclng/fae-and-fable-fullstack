@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type DragEvent } from "react";
 import { fileUrl, type AdminProduct, type ProductData } from "@/lib/api";
 import { useAdmin, type AdminProps } from "../use-admin";
 import { Icon } from "@/components/icon";
+import { resizeImage } from "@/lib/resize";
 
 type Call = ReturnType<typeof useAdmin>["call"];
 
@@ -17,7 +18,7 @@ const EMPTY: ProductData = { name: "", type: "mirror", price: "", description: "
 /** Uploads one image for the catalog and returns the stored file name. */
 export async function uploadImage(call: Call, file: File) {
   const form = new FormData();
-  form.set("image", file);
+  form.set("image", await resizeImage(file));
   return (await call<{ file: string }>("/admin/catalog/uploads", { method: "POST", body: form })).file;
 }
 

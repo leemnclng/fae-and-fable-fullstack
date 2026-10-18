@@ -36,12 +36,15 @@ type Props = {
   guest?: GuestQuota | null;
   /** "Not you?": forget this guest and ask for a name again. */
   onSwitchGuest?: () => void;
-  /** Uploads files plus an optional private note, reporting progress 0–1. Throws with a message on failure. */
+  /**
+   * Shares the photos (one request each) plus an optional private note, reporting progress 0–1.
+   * Resolves with the photos that couldn't be shared; throws only when nothing more can be sent (expired link or session).
+   */
   onUpload: (
     files: File[],
     note: GuestNote,
     onProgress: (fraction: number) => void,
-  ) => Promise<void>;
+  ) => Promise<{ failed: { file: File; reason: string }[] }>;
   /** Everyone's photos once unlocked; null hides the wall (admin switched it off). */
   wall?: WallPhoto[] | null;
   /** Admin preview: fill the phone frame instead of the viewport. */
@@ -174,15 +177,25 @@ export function GuestView({
     setError("");
     setProgress(0);
     try {
-      await onUpload(
+      const { failed } = await onUpload(
         picked.map((p) => p.file),
         { message: note.trim() },
         setProgress,
       );
-      setShared((s) => [...picked, ...s]);
-      setPicked([]);
+      const bad = new Set(failed.map((f) => f.file));
+      setShared((s) => [...picked.filter((p) => !bad.has(p.file)), ...s]);
+      // The note goes out first, so it's sent even when some photos fail
       setNoteSent(!!note.trim());
       setNote("");
+      if (failed.length) {
+        // Keep only the photos that failed, so retrying never shares the others twice
+        setPicked(picked.filter((p) => bad.has(p.file)));
+        setError(
+          `${failed.length} of ${picked.length} ${picked.length === 1 ? "photo" : "photos"} couldn't be shared: ${failed[0].reason} Tap Share to try ${failed.length === 1 ? "it" : "them"} again.`,
+        );
+        return;
+      }
+      setPicked([]);
       setStep("thanks");
     } catch (e) {
       setError((e as Error).message);

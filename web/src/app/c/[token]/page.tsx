@@ -9,7 +9,8 @@ type Gallery = {
   clientName: string;
   eventDate: string;
   expiresAt: string;
-  photos: { id: number; url: string; isVideo: boolean; by: string | null }[];
+  /** `url` is the API route that checks the client link and redirects to the photo. */
+  photos: { id: number; url: string; by: string | null }[];
   /** Private guestbook: only the client sees these. */
   messages: { id: number; name: string; body: string; createdAt: string; photoIds: number[] }[];
 };
@@ -49,7 +50,7 @@ export default function ClientGalleryPage() {
           </div>
           <ul className="columns-1 gap-4 md:columns-2 lg:columns-3">
             {gallery.messages.map((m) => {
-              const photos = gallery.photos.filter((p) => m.photoIds.includes(p.id) && !p.isVideo);
+              const photos = gallery.photos.filter((p) => m.photoIds.includes(p.id));
               return (
                 <li key={m.id} className="card mb-4 break-inside-avoid">
                   <p className="font-display text-xl leading-snug whitespace-pre-line">&ldquo;{m.body}&rdquo;</p>
@@ -77,11 +78,7 @@ export default function ClientGalleryPage() {
       <div className="columns-2 gap-3 md:columns-3 lg:columns-4">
         {gallery.photos.map((photo) => (
           <figure key={photo.id} id={`photo-${photo.id}`} className="group relative mb-3 scroll-mt-6 break-inside-avoid overflow-hidden rounded-xl bg-stone-100">
-            {photo.isVideo ? (
-              <video src={API + photo.url} controls preload="metadata" className="w-full" />
-            ) : (
-              <img src={API + photo.url} alt="" loading="lazy" className="w-full" />
-            )}
+            <img src={API + photo.url} alt="" loading="lazy" className="w-full" />
             {photo.by && (
               <span className="absolute bottom-2 left-2 max-w-[55%] truncate rounded-full bg-black/45 px-2.5 py-1 text-xs text-white backdrop-blur">
                 by {photo.by}

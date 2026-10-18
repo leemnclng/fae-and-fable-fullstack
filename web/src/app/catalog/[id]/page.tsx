@@ -27,7 +27,7 @@ async function Product({ params }: { params: Promise<{ id: string }> }) {
     }),
   ]);
   const name = content.settings.businessName || "Fae&Fable";
-  const photos = product.photos.map((file, i) => ({ id: i, url: fileUrl(file), isVideo: false }));
+  const photos = product.photos.map((file, i) => ({ id: i, url: fileUrl(file) }));
   const back = product.type === "mirror" ? { href: "/catalog#mirrors", label: "All mirrors" } : { href: "/catalog#packages", label: "All packages" };
 
   return (

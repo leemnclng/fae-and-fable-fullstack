@@ -2,9 +2,9 @@
 
 import { useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "@/components/icon";
-import type { PhotoNote, ShowcasePhoto } from "@/lib/api";
+import type { PhotoNote } from "@/lib/api";
 
-type Photo = ShowcasePhoto & { badges?: string[]; note?: PhotoNote };
+type Photo = { id: number; url: string; badges?: string[]; note?: PhotoNote };
 type Layout = "masonry" | "grid" | "collage" | "stack";
 
 const LIST: Record<Layout, string> = {
@@ -43,23 +43,12 @@ export function Gallery({ photos, title, layout = "masonry", onShare }: { photos
               aria-label={`Open photo ${i + 1} of ${photos.length}${photo.badges?.length ? ` (${photo.badges.join(", ")})` : ""}`}
               className={`group relative block w-full cursor-zoom-in overflow-hidden bg-stone-100 ${grid ? "h-full rounded-md" : layout === "collage" ? "rounded-lg" : layout === "stack" ? "rounded-2xl" : ""} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-ink`}
             >
-              {photo.isVideo ? (
-                <>
-                  <video src={photo.url} muted playsInline preload="metadata" className={grid ? "h-full w-full object-cover" : "w-full"} />
-                  <span className="absolute inset-0 flex items-center justify-center" aria-hidden>
-                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/85 backdrop-blur">
-                      <svg viewBox="0 0 24 24" className="ml-1 h-6 w-6 fill-foreground"><path d="M8 5v14l11-7z" /></svg>
-                    </span>
-                  </span>
-                </>
-              ) : (
-                <img
-                  src={photo.url}
-                  alt=""
-                  loading="lazy"
-                  className={`w-full transition duration-500 group-hover:scale-[1.03] motion-reduce:transition-none ${grid ? "h-full object-cover" : ""}`}
-                />
-              )}
+              <img
+                src={photo.url}
+                alt=""
+                loading="lazy"
+                className={`w-full transition duration-500 group-hover:scale-[1.03] motion-reduce:transition-none ${grid ? "h-full object-cover" : ""}`}
+              />
               {!!photo.badges?.length && (
                 <span className="absolute top-1.5 left-1.5 flex gap-1" aria-hidden>
                   {photo.badges.map((b) => (
@@ -99,9 +88,7 @@ export function Gallery({ photos, title, layout = "masonry", onShare }: { photos
               className="relative flex min-h-0 flex-1 items-center justify-center px-4 pb-6 md:px-20"
               onClick={(e) => e.target === e.currentTarget && dialog.current?.close()}
             >
-              {current.isVideo ? (
-                <video key={current.id} src={current.url} controls autoPlay playsInline className="max-h-full max-w-full" />
-              ) : current.note ? (
+              {current.note ? (
                 <NoteCard key={current.id} src={current.url} alt={`${title}, photo ${index + 1}`} note={current.note} />
               ) : (
                 <img key={current.id} src={current.url} alt={`${title}, photo ${index + 1}`} className="max-h-full max-w-full object-contain" />

@@ -7,28 +7,29 @@ import {
   API,
   api,
   ApiError,
+  fileUrl,
   type GuestDesign,
   type WallPhoto,
 } from "@/lib/api";
+import { resizeImage } from "@/lib/resize";
 import { useStoredValue } from "@/lib/storage";
 
-const BATCH = 20; // matches the API's per-request file limit
 const WALL_REFRESH_MS = 15_000;
 const FRESH_MS = 5 * 60_000; // photos newer than this get a "New" badge
 
 type GuestEvent = { name: string; eventDate: string; design: GuestDesign };
 
-/** POST one batch with XHR, since fetch can't report upload progress. */
-function sendBatch(
+/** POST one photo with XHR, since fetch can't report upload progress. */
+function sendPhoto(
   url: string,
   token: string,
-  files: File[],
+  file: File,
   messageId: number | null,
   onBytes: (loaded: number) => void,
 ) {
   return new Promise<void>((resolve, reject) => {
     const body = new FormData();
-    files.forEach((f) => body.append("photos", f));
+    body.append("photos", file);
     if (messageId) body.set("messageId", String(messageId));
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
@@ -115,7 +116,7 @@ export default function GuestUploadPage() {
           ...e,
           design: {
             ...e.design,
-            background: e.design.background && API + e.design.background,
+            background: e.design.background && fileUrl(e.design.background),
           },
         }),
       )
@@ -150,8 +151,7 @@ export default function GuestUploadPage() {
       }}
       wall={wall}
       onUpload={async (files, note, onProgress) => {
-        const total = files.reduce((n, f) => n + f.size, 0) || 1;
-        let done = 0;
+        const failed: { file: File; reason: string }[] = [];
         try {
           // The private note goes first so the photos can be linked to it in the client's guestbook
           const messageId = note.message
@@ -163,20 +163,27 @@ export default function GuestUploadPage() {
                 })
               ).id
             : null;
-          for (let i = 0; i < files.length; i += BATCH) {
-            const batch = files.slice(i, i + BATCH);
-            await sendBatch(
-              `${API}/guest/${slug}/photos`,
-              token ?? "",
-              batch,
-              messageId,
-              (loaded) => onProgress((done + loaded) / total),
-            );
-            done += batch.reduce((n, f) => n + f.size, 0);
+          // One resized photo per request: each stays under the host's request limit, and one failure doesn't sink the rest
+          for (const [i, file] of files.entries()) {
+            try {
+              const small = await resizeImage(file);
+              await sendPhoto(
+                `${API}/guest/${slug}/photos`,
+                token ?? "",
+                small,
+                messageId,
+                (loaded) => onProgress((i + Math.min(1, loaded / small.size)) / files.length),
+              );
+            } catch (e) {
+              // An expired link or session means nothing else will go through either
+              if (e instanceof ApiError && (e.status === 401 || e.status === 410)) throw e;
+              failed.push({ file, reason: (e as Error).message });
+            }
+            onProgress((i + 1) / files.length);
           }
-          onProgress(1);
           loadWall();
           await loadMe();
+          return { failed };
         } catch (e) {
           // Session expired or passcode changed: send them back to the passcode step on next visit
           if (e instanceof ApiError && e.status === 401) setToken(null);

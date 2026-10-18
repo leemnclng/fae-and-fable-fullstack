@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { API, formatDate, type Showcase, type ShowcaseDetail } from "@/lib/api";
+import { fileUrl, formatDate, type Showcase, type ShowcaseDetail } from "@/lib/api";
+import { resizeImage } from "@/lib/resize";
 import { useAdmin, type AdminProps } from "./use-admin";
 import { Icon } from "@/components/icon";
 
@@ -9,6 +10,8 @@ export function Showcases(props: AdminProps) {
   const { data: showcases, error, call, reload } = useAdmin<Showcase[]>("/showcases", props);
   const [editing, setEditing] = useState<ShowcaseDetail | null>(null);
   const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [failed, setFailed] = useState<string[]>([]);
 
   async function edit(id: number) {
     setEditing(await call<ShowcaseDetail>(`/showcases/${id}`).catch(() => null));
@@ -19,14 +22,30 @@ export function Showcases(props: AdminProps) {
     e.preventDefault();
     const formEl = e.currentTarget;
     const form = new FormData(formEl);
-    if (!form.getAll("photos").some((f) => f instanceof File && f.size > 0)) form.delete("photos");
+    const fields = Object.fromEntries(["title", "eventDate", "location", "description"].map((k) => [k, String(form.get(k) ?? "")]));
+    const photos = form.getAll("photos").filter((f): f is File => f instanceof File && f.size > 0);
     setSaving(true);
+    setFailed([]);
     try {
-      const saved = await call<ShowcaseDetail>(editing ? `/admin/showcases/${editing.id}` : "/admin/showcases", {
+      let saved = await call<ShowcaseDetail>(editing ? `/admin/showcases/${editing.id}` : "/admin/showcases", {
         method: editing ? "PATCH" : "POST",
-        body: form,
+        body: JSON.stringify(fields),
       });
-      if (editing) setEditing(saved);
+      // One resized photo per request keeps each upload under the host's request limit
+      const failures: string[] = [];
+      for (const [i, photo] of photos.entries()) {
+        setProgress(`Uploading photo ${i + 1} of ${photos.length}…`);
+        try {
+          const body = new FormData();
+          body.set("photo", await resizeImage(photo));
+          saved = await call<ShowcaseDetail>(`/admin/showcases/${saved.id}/photos`, { method: "POST", body });
+        } catch (err) {
+          failures.push(`${photo.name}: ${(err as Error).message}`);
+        }
+      }
+      setFailed(failures);
+      // Keep a new post open for retrying if any photo failed; otherwise start a fresh form
+      if (editing || failures.length) setEditing(saved);
       else formEl.reset();
       (formEl.elements.namedItem("photos") as HTMLInputElement).value = "";
       reload();
@@ -34,6 +53,7 @@ export function Showcases(props: AdminProps) {
       // error is shown by useAdmin
     } finally {
       setSaving(false);
+      setProgress("");
     }
   }
 
@@ -66,19 +86,15 @@ export function Showcases(props: AdminProps) {
         <input name="location" defaultValue={editing?.location} placeholder="Venue / city (optional)" className="input" />
         <textarea name="description" defaultValue={editing?.description} placeholder="The story: theme, highlights, a kind word from the client…" rows={5} className="input" />
         <label className="block text-sm text-stone-600">
-          {editing ? "Add more photos" : "Photos"} <span className="text-stone-500">(up to 40 at a time; first photo is the cover)</span>
-          <input name="photos" type="file" accept="image/*,video/mp4,video/quicktime" multiple className="mt-1 block w-full text-sm" />
+          {editing ? "Add more photos" : "Photos"} <span className="text-stone-500">(first photo is the cover)</span>
+          <input name="photos" type="file" accept="image/*" multiple className="mt-1 block w-full text-sm" />
         </label>
 
         {editing && editing.photos.length > 0 && (
           <ul className="grid grid-cols-4 gap-1.5">
             {editing.photos.map((photo, i) => (
               <li key={photo.id} className="group relative aspect-square overflow-hidden bg-stone-100">
-                {photo.isVideo ? (
-                  <video src={API + photo.url} muted preload="metadata" className="h-full w-full object-cover" />
-                ) : (
-                  <img src={API + photo.url} alt="" className="h-full w-full object-cover" />
-                )}
+                <img src={fileUrl(photo.file)} alt="" className="h-full w-full object-cover" />
                 <button
                   type="button"
                   onClick={() => removePhoto(photo.id)}
@@ -93,6 +109,17 @@ export function Showcases(props: AdminProps) {
         )}
 
         {error && <p className="text-sm text-red-600">{error}</p>}
+        {progress && <p className="text-sm text-stone-600" role="status">{progress}</p>}
+        {failed.length > 0 && (
+          <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700" role="alert">
+            {failed.length} {failed.length === 1 ? "photo wasn't" : "photos weren't"} added. Choose {failed.length === 1 ? "it" : "them"} again to retry:
+            <ul className="mt-1 list-disc pl-5">
+              {failed.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="flex gap-2">
           <button disabled={saving} className="btn flex-1">{saving ? "Saving…" : editing ? "Save changes" : "Publish"}</button>
           {editing && (
@@ -109,7 +136,7 @@ export function Showcases(props: AdminProps) {
           {showcases?.map((show) => (
             <li key={show.id} className={`card overflow-hidden p-0 ${editing?.id === show.id ? "ring-2 ring-accent-ink" : ""}`}>
               <div className="aspect-4/3 bg-stone-100">
-                {show.cover && <img src={API + show.cover} alt="" className="h-full w-full object-cover" />}
+                {show.cover && <img src={fileUrl(show.cover)} alt="" className="h-full w-full object-cover" />}
               </div>
               <div className="space-y-2 p-4">
                 <p className="font-medium">{show.title}</p>
