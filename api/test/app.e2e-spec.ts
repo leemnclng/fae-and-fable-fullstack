@@ -14,7 +14,7 @@ const { AppModule } = await import('../src/app.module.js');
 const { FILE_STORE } = await import('../src/storage/file-store.js');
 const { MemoryStore } = await import('./memory-store.js');
 const { freshSchema } = await import('./pg-harness.js');
-const { setup } = await import('../src/main.js');
+const { setup } = await import('../src/setup.js');
 const { expiresAt } = await import('../src/events.js');
 
 // smallest valid JPEG header is enough; the API only checks the extension
