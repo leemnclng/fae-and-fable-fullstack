@@ -62,6 +62,47 @@ describe('Fae&Fable API', () => {
     await http.get('/admin/events').expect(401);
   });
 
+  it('lets any admin add and remove other admins, who can change their own password', async () => {
+    const http = request(app.getHttpServer());
+    const login = (email: string, password: string) => http.post('/auth/login').send({ email, password });
+
+    // Adding: valid email, a password of at least 8 characters, no duplicates (the main account included)
+    await http.post('/admin/admins').send({ email: 'ana@test.dev', password: 'longenough' }).expect(401);
+    await http.post('/admin/admins').set('Authorization', admin).send({ email: 'not-an-email', password: 'longenough' }).expect(400);
+    await http.post('/admin/admins').set('Authorization', admin).send({ email: 'ana@test.dev', password: 'short' }).expect(400);
+    await http.post('/admin/admins').set('Authorization', admin).send({ email: 'ADMIN@test.dev', password: 'longenough' }).expect(409);
+    const ana = (await http.post('/admin/admins').set('Authorization', admin).send({ email: ' Ana@Test.dev ', password: 'longenough' }).expect(201)).body;
+    expect(ana).toMatchObject({ email: 'ana@test.dev' });
+    await http.post('/admin/admins').set('Authorization', admin).send({ email: 'ana@test.dev', password: 'longenough' }).expect(409);
+
+    // The new admin logs in (email case doesn't matter) and sees everyone, the main account first and marked
+    await login('ana@test.dev', 'wrong-password').expect(401);
+    const anaAuth = `Bearer ${(await login('ANA@test.dev', 'longenough').expect(201)).body.token}`;
+    const list = (await http.get('/admin/admins').set('Authorization', anaAuth).expect(200)).body;
+    expect(list.admins.map((a: { email: string; owner: boolean }) => [a.email, a.owner])).toEqual([['admin@test.dev', true], ['ana@test.dev', false]]);
+    expect(list.me).toBe(ana.id);
+    expect(JSON.stringify(list)).not.toMatch(/scrypt|hash/);
+
+    // Own password: the current one is required; the main account's lives in the API settings instead
+    await http.put('/admin/password').set('Authorization', anaAuth).send({ current: 'nope', password: 'newpassword' }).expect(400);
+    await http.put('/admin/password').set('Authorization', anaAuth).send({ current: 'longenough', password: 'short' }).expect(400);
+    await http.put('/admin/password').set('Authorization', anaAuth).send({ current: 'longenough', password: 'newpassword' }).expect(200);
+    await login('ana@test.dev', 'longenough').expect(401);
+    await login('ana@test.dev', 'newpassword').expect(201);
+    await http.put('/admin/password').set('Authorization', admin).send({ current: 'pw', password: 'newpassword' }).expect(400);
+
+    // Removing: not yourself, not the main account; a removed admin is locked out at once, even with a live token
+    await http.delete(`/admin/admins/${ana.id}`).set('Authorization', anaAuth).expect(400);
+    await http.delete('/admin/admins/owner').set('Authorization', anaAuth).expect(400);
+    const ben = (await http.post('/admin/admins').set('Authorization', anaAuth).send({ email: 'ben@test.dev', password: 'benpassword' }).expect(201)).body;
+    const benAuth = `Bearer ${(await login('ben@test.dev', 'benpassword').expect(201)).body.token}`;
+    await http.delete(`/admin/admins/${ben.id}`).set('Authorization', anaAuth).expect(200);
+    await http.get('/admin/events').set('Authorization', benAuth).expect(401);
+    await login('ben@test.dev', 'benpassword').expect(401);
+    await http.delete(`/admin/admins/${ben.id}`).set('Authorization', admin).expect(404);
+    await http.delete(`/admin/admins/${ana.id}`).set('Authorization', admin).expect(200);
+  });
+
   it('manages public content and settings', async () => {
     const http = request(app.getHttpServer());
     await http.put('/admin/settings').set('Authorization', admin).send({ businessName: 'Fae&Fable', hacked: 'x' }).expect(200);

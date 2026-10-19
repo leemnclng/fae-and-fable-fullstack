@@ -1,5 +1,6 @@
 import { Controller, Get, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
+import { AdminsController } from './admins.js';
 import { AuthController } from './auth.js';
 import { config } from './config.js';
 import { CatalogPageController } from './catalog/page.js';
@@ -21,7 +22,7 @@ class HealthController {
 
 @Module({
   imports: [DbModule, StorageModule, JwtModule.register({ global: true, secret: config.jwtSecret })],
-  controllers: [HealthController, AuthController, ContentController, AdminEventsController, GuestController, ClientController, PublicEventsController, ShowcasesController, ProductsController, CatalogPageController],
+  controllers: [HealthController, AuthController, AdminsController, ContentController, AdminEventsController, GuestController, ClientController, PublicEventsController, ShowcasesController, ProductsController, CatalogPageController],
   providers: [EventsService],
 })
 export class AppModule {}

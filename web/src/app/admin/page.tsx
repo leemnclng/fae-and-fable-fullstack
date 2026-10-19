@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { api } from "@/lib/api";
 import { useStoredValue } from "@/lib/storage";
+import { Admins } from "./admins";
 import { Catalog } from "./catalog";
 import { Events } from "./events";
 import { SettingsForm } from "./settings";
@@ -17,6 +18,7 @@ const ICONS = {
   showcases: "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 15l5-5 4 4 3-3 6 6M15 9h.01",
   catalog: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
+  admins: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
   site: "M7 17 17 7M7 7h10v10",
   logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
 } as const;
@@ -26,6 +28,7 @@ const SECTIONS = {
   showcases: { label: "Past events", description: "Publish highlights from finished events on the public Events page." },
   catalog: { label: "Catalog", description: "Mirrors, packages and the catalog page. Changes go live when you publish." },
   settings: { label: "Site settings", description: "Homepage banner and business details shown across the public site." },
+  admins: { label: "Admins", description: "Who can log in to this admin page. Add teammates or remove access." },
 } as const;
 type Section = keyof typeof SECTIONS;
 
@@ -101,6 +104,7 @@ export default function AdminPage() {
           {section === "showcases" && <Showcases {...props} />}
           {section === "catalog" && <Catalog {...props} />}
           {section === "settings" && <SettingsForm {...props} />}
+          {section === "admins" && <Admins {...props} />}
         </main>
       </div>
     </div>
