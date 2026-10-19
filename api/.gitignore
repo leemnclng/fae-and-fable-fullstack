@@ -3,3 +3,6 @@ dist
 coverage
 data
 .env
+.env.prod
+.env.local
+.env.nonprod

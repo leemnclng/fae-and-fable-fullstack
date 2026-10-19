@@ -9,7 +9,15 @@ export function setup(app: NestExpressApplication) {
   return app;
 }
 
-if (!process.env.VITEST) {
+// Vercel's NestJS entrypoint pattern: a bootstrap() call rather than top-level await, which its bundler may not support
+async function bootstrap() {
   const app = setup(await NestFactory.create<NestExpressApplication>(AppModule));
   await app.listen(config.port);
+}
+
+if (!process.env.VITEST) {
+  bootstrap().catch((e) => {
+    console.error('API failed to start:', e); // shows in Vercel's runtime logs
+    process.exit(1);
+  });
 }
