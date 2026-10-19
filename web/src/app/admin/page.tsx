@@ -7,6 +7,7 @@ import { Catalog } from "./catalog";
 import { Events } from "./events";
 import { SettingsForm } from "./settings";
 import { Showcases } from "./showcases";
+import { Wordmark } from "@/components/wordmark";
 
 const TOKEN_KEY = "ff_admin_token";
 
@@ -60,7 +61,7 @@ export default function AdminPage() {
       <aside className="sticky top-0 z-20 flex shrink-0 flex-col border-b border-stone-200 bg-white lg:h-dvh lg:w-64 lg:border-r lg:border-b-0">
         <div className="flex items-center justify-between px-4 py-3 lg:px-6 lg:py-6">
           <div>
-            <p className="font-display text-xl leading-none">Fae&amp;Fable</p>
+            <Wordmark className="h-10 w-auto lg:h-auto lg:w-full" />
             <p className="mt-1 text-[11px] uppercase tracking-[0.25em] text-stone-500">Admin</p>
           </div>
           <button onClick={logout} className={`${navItem(false)} lg:hidden`} aria-label="Log out">

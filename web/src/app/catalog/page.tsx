@@ -16,12 +16,11 @@ async function Catalog() {
     api<SiteContent>("/content").catch((): SiteContent => ({ settings: {} })),
     api<PublicCatalog>("/catalog"),
   ]);
-  const name = content.settings.businessName || "Fae&Fable";
   const first = catalog.sections[0];
   const heroHasImage = first?.type === "slideshow" && !!first.slides[0]?.image;
 
   return (
-    <SiteChrome name={name} heroHasImage={heroHasImage}>
+    <SiteChrome settings={content.settings} heroHasImage={heroHasImage}>
       {/* Without a slideshow up top, keep the first section clear of the fixed header */}
       {first?.type !== "slideshow" && <div className="h-16" aria-hidden />}
       <CatalogSections sections={catalog.sections} products={catalog.products} settings={content.settings} />

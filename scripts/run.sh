@@ -59,7 +59,7 @@ fi
 
 # --- database schema (safe to repeat: only pending migrations run) ---
 echo
-(cd api && pnpm db:migrate)
+(cd api && pnpm db:bootstrap)
 
 # Kill a process and all its descendants (nest/next spawn child servers that outlive their parent).
 kill_tree() {

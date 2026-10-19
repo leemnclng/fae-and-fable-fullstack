@@ -1,3 +1,5 @@
+import type { HeadlineFont, NoteFont, NoteTemplate } from "./event-style";
+
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 export class ApiError extends Error {
@@ -19,7 +21,7 @@ export async function api<T>(path: string, { token, ...init }: RequestInit & { t
   return data as T;
 }
 
-export type Settings = Partial<Record<"businessName" | "tagline" | "about" | "email" | "phone" | "instagram" | "location", string>> & {
+export type Settings = Partial<Record<"businessName" | "tagline" | "about" | "email" | "phone" | "instagram" | "location" | "facebook", string>> & {
   /** Homepage banner photo: a file name in the public bucket (render with fileUrl). */
   banner?: string;
 };
@@ -104,6 +106,10 @@ export type GuestDesign = {
   showWall?: boolean;
   /** Notes written after this was turned on appear beside their photos on the wall. */
   showMessages?: boolean;
+  /** Note card look and fonts; unset = Classic cream, Caveat, Playfair Display. */
+  noteTemplate?: NoteTemplate;
+  noteFont?: NoteFont;
+  headlineFont?: HeadlineFont;
   /** Look of the title card and gallery pane; unset = glass. */
   panel?: PanelStyle;
 };

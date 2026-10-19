@@ -2,6 +2,8 @@
 
 import { useRef, useState, type CSSProperties } from "react";
 import { Icon, type IconName } from "@/components/icon";
+import { NoteFace } from "@/components/note-face";
+import type { NoteFont, NoteTemplate } from "@/lib/event-style";
 import type { PhotoNote } from "@/lib/api";
 
 type Photo = { id: number; url: string; badges?: string[]; note?: PhotoNote };
@@ -20,7 +22,20 @@ const LIST: Record<Layout, string> = {
  * Photo grid + full-screen viewer. Native <dialog> gives focus trapping and Esc-to-close for free.
  * Photos with a note open like a greeting card; `onShare` adds a nudge to share your own.
  */
-export function Gallery({ photos, title, layout = "masonry", onShare }: { photos: Photo[]; title: string; layout?: Layout; onShare?: () => void }) {
+export function Gallery({
+  photos,
+  title,
+  layout = "masonry",
+  onShare,
+  noteStyle,
+}: {
+  photos: Photo[];
+  title: string;
+  layout?: Layout;
+  onShare?: () => void;
+  /** The event's note card template and handwriting. */
+  noteStyle?: { template?: NoteTemplate; font?: NoteFont };
+}) {
   const grid = layout === "grid";
   const dialog = useRef<HTMLDialogElement>(null);
   const [index, setIndex] = useState<number | null>(null);
@@ -89,7 +104,7 @@ export function Gallery({ photos, title, layout = "masonry", onShare }: { photos
               onClick={(e) => e.target === e.currentTarget && dialog.current?.close()}
             >
               {current.note ? (
-                <NoteCard key={current.id} src={current.url} alt={`${title}, photo ${index + 1}`} note={current.note} />
+                <NoteCard key={current.id} src={current.url} alt={`${title}, photo ${index + 1}`} note={current.note} style={noteStyle} />
               ) : (
                 <img key={current.id} src={current.url} alt={`${title}, photo ${index + 1}`} className="max-h-full max-w-full object-contain" />
               )}
@@ -151,7 +166,7 @@ const HEARTS = Array.from({ length: 14 }, (_, i) => ({
  * A photo with a guest's note, opened like a greeting card: on wide screens the front swings open on its left hinge
  * and the note sits beside the photo; on phones the whole card flips over to show the note on its back.
  */
-function NoteCard({ src, alt, note }: { src: string; alt: string; note: PhotoNote }) {
+function NoteCard({ src, alt, note, style }: { src: string; alt: string; note: PhotoNote; style?: { template?: NoteTemplate; font?: NoteFont } }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="flex flex-col items-center gap-4">
@@ -164,17 +179,8 @@ function NoteCard({ src, alt, note }: { src: string; alt: string; note: PhotoNot
           <div
             className={`pointer-events-none absolute inset-0 origin-left transition-transform duration-1000 ease-[cubic-bezier(.6,.05,.25,1)] transform-3d motion-reduce:transition-none ${open ? "md:-rotate-y-180" : ""}`}
           >
-            <div
-              aria-hidden={!open}
-              className={`absolute inset-0 flex rotate-y-180 flex-col overflow-y-auto rounded-lg bg-[#fff9f4] p-6 text-left text-foreground shadow-2xl backface-hidden md:p-8 ${open ? "pointer-events-auto" : ""}`}
-            >
-              {/* Phones flip the card to the photo's own size, which can be short: name the writer up top there */}
-              <p className="text-xs uppercase tracking-[0.3em] text-accent-ink">
-                <span className="md:hidden">A note from {note.name}</span>
-                <span className="max-md:hidden">A note for the couple</span>
-              </p>
-              <p className="font-script mt-3 flex-1 text-2xl leading-snug whitespace-pre-line md:mt-4 md:text-4xl">{note.body}</p>
-              <p className="mt-4 text-sm uppercase tracking-[0.2em] text-accent-ink max-md:hidden">— {note.name}</p>
+            <div aria-hidden={!open} className={`absolute inset-0 rotate-y-180 backface-hidden ${open ? "pointer-events-auto" : ""}`}>
+              <NoteFace note={note} template={style?.template} font={style?.font} className="h-full shadow-2xl" />
             </div>
           </div>
           {!open && (

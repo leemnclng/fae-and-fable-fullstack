@@ -60,6 +60,8 @@ export default function GuestUploadPage() {
   const [event, setEvent] = useState<GuestEvent | null>(null);
   const [error, setError] = useState("");
   const [token, setToken] = useStoredValue(`ff_guest_${slug}`, "session");
+  // One id per browser, kept across tabs and events, so a new name or tab doesn't reset the photo allowance
+  const [device, setDevice] = useStoredValue("ff_device");
   const [wall, setWall] = useState<WallPhoto[] | null>(null);
   const [guest, setGuest] = useState<GuestQuota | null>(null);
 
@@ -140,12 +142,19 @@ export default function GuestUploadPage() {
         setToken(null);
       }}
       onUnlock={async (passcode, name) => {
-        const { token: newToken, ...quota } = await api<
-          GuestQuota & { token: string }
-        >(`/guest/${slug}/unlock`, {
-          method: "POST",
-          body: JSON.stringify({ passcode, name }),
-        });
+        const {
+          token: newToken,
+          device: deviceId,
+          ...quota
+        } = await api<GuestQuota & { token: string; device: string }>(
+          `/guest/${slug}/unlock`,
+          {
+            method: "POST",
+            // The server hands out this id on first unlock; sending it back keeps one photo allowance per phone
+            body: JSON.stringify({ passcode, name, device: device ?? undefined }),
+          },
+        );
+        setDevice(deviceId);
         setGuest(quota);
         setToken(newToken);
       }}

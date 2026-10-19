@@ -26,12 +26,11 @@ async function Product({ params }: { params: Promise<{ id: string }> }) {
       throw e;
     }),
   ]);
-  const name = content.settings.businessName || "Fae&Fable";
   const photos = product.photos.map((file, i) => ({ id: i, url: fileUrl(file) }));
   const back = product.type === "mirror" ? { href: "/catalog#mirrors", label: "All mirrors" } : { href: "/catalog#packages", label: "All packages" };
 
   return (
-    <SiteChrome name={name}>
+    <SiteChrome settings={content.settings}>
       <article className={`grid gap-10 pt-28 pb-16 md:grid-cols-2 md:gap-16 md:pt-32 md:pb-24 ${GUTTER}`}>
         <div>
           {photos.length ? (

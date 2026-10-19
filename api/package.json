@@ -17,6 +17,8 @@
     "lint": "oxlint src/ test/",
     "test": "vitest run",
     "db:migrate": "nest build && node dist/migrate-cli.js",
+    "db:migrate:deploy": "node dist/migrate-cli.js --production-only",
+    "db:bootstrap": "nest build && node dist/migrate-cli.js --bootstrap",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",

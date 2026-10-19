@@ -13,6 +13,7 @@ import {
   type PanelStyle,
   type WallPhoto,
 } from "@/lib/api";
+import { headlineStyle, type NoteFont, type NoteTemplate } from "@/lib/event-style";
 import { Gallery } from "./gallery";
 import { Icon } from "@/components/icon";
 
@@ -128,34 +129,34 @@ export function GuestView({
     "--g-soft": `color-mix(in srgb, ${color} 22%, white)`,
   } as CSSProperties;
   const pane = PANELS[design.panel ?? "glass"].className;
+  const headline = headlineStyle(design.headlineFont);
   const button =
     "inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-full bg-(--g) px-6 py-3.5 text-base font-medium text-(--g-ink) shadow-sm transition hover:brightness-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none";
 
-  // Photos this guest can still add, after what's already picked
+  // Photos this guest can still share
   const left =
     guest?.limit == null ? Infinity : Math.max(0, guest.limit - guest.uploaded);
-  const room = left - picked.length;
 
+  // Guests share one photo at a time; dropping several keeps the first
   function add(files: FileList | File[]) {
     const list = [...files];
     const valid = list.filter(
       (f) => ALLOWED.test(f.name) && f.size <= MAX_MB * 1024 * 1024,
     );
-    const ok = valid.slice(0, Math.max(0, room));
+    const ok = left > 0 ? valid.slice(0, 1) : [];
     setSkipped(list.length - valid.length);
     setError(
       ok.length < valid.length
-        ? `You can add ${Math.max(0, room)} more ${room === 1 ? "photo" : "photos"}, so we kept the first ${ok.length}.`
+        ? "One photo at a time, so we kept the first."
         : "",
     );
-    setPicked((p) => [
-      ...p,
-      ...ok.map((file) => {
+    setPicked(
+      ok.map((file) => {
         const url = URL.createObjectURL(file);
         urls.current.add(url);
         return { file, url };
       }),
-    ]);
+    );
   }
 
   async function unlock(passcode: string, name: string) {
@@ -212,10 +213,9 @@ export function GuestView({
     setDragging(false);
     if (e.dataTransfer.files.length) add(e.dataTransfer.files);
   };
-  const totalMb = picked.reduce((n, p) => n + p.file.size, 0) / 1024 / 1024;
   const hasNote = !!note.trim();
   const shareLabel = picked.length
-    ? `Share ${picked.length} ${picked.length === 1 ? "photo" : "photos"}${hasNote ? " & note" : ""}`
+    ? `Share photo${hasNote ? " & note" : ""}`
     : hasNote
       ? "Send note"
       : "Share";
@@ -299,7 +299,7 @@ export function GuestView({
               </span>
               {guest.limit !== null && (
                 <span className="rounded-full bg-(--g)/20 px-3 py-0.5 text-xs">
-                  {left} of {guest.limit} photos left
+                  {left} of {guest.limit} {guest.limit === 1 ? "photo" : "photos"} left
                 </span>
               )}
             </div>
@@ -307,16 +307,16 @@ export function GuestView({
           {picked.length === 0 && (
             <p className="text-stone-600">
               {design.uploadMessage ||
-                "Add the photos you took. The hosts will love them."}
+                "Pick your favourite photo from today. The hosts will love it."}
             </p>
           )}
 
           {left === 0 ? (
             <p className="rounded-2xl border-2 border-dashed border-stone-300 px-4 py-4 text-sm text-stone-600">
-              You&apos;ve shared all {guest?.limit} of your photos. Thank you!
+              {guest?.limit === 1 ? "You've shared your photo." : `You've shared all ${guest?.limit} of your photos.`} Thank you!
               You can still leave a note for the hosts below.
             </p>
-          ) : (
+          ) : picked.length === 0 && (
             <>
               <label
                 onDragOver={(e) => {
@@ -346,15 +346,14 @@ export function GuestView({
                 </span>
                 <span className="flex flex-col">
                   <span className="font-medium">
-                    {picked.length ? "Add more" : "Choose photos"}
+                    Choose a photo
                   </span>
                   <span className="text-xs text-stone-500">
-                    Tap or drag here · up to {MAX_MB} MB each
+                    Tap or drag here · up to {MAX_MB} MB
                   </span>
                 </span>
                 <input
                   type="file"
-                  multiple
                   accept="image/*"
                   className="sr-only"
                   onChange={(e) => {
@@ -398,7 +397,7 @@ export function GuestView({
 
           {picked.length > 0 && (
             <>
-              <ul className="grid grid-cols-4 gap-1.5">
+              <ul className="mx-auto w-full max-w-56">
                 {picked.map((p, i) => (
                   <li
                     key={p.url}
@@ -426,9 +425,6 @@ export function GuestView({
                   </li>
                 ))}
               </ul>
-              <p className="text-xs text-stone-500">
-                {picked.length} selected · {totalMb.toFixed(1)} MB
-              </p>
             </>
           )}
 
@@ -447,7 +443,7 @@ export function GuestView({
               Leave a note for the hosts
               {guest ? `, signed ${guest.name}` : ""}.{" "}
               {design.showMessages
-                ? "It may appear beside your photos on the wall."
+                ? "It may appear beside your photo on the wall."
                 : "Only they will see it."}
               <span
                 className="ml-auto transition-transform group-open:rotate-180"
@@ -510,7 +506,7 @@ export function GuestView({
               <path d="M5 12l5 5L20 7" />
             </svg>
           </span>
-          <p className="font-display text-2xl">
+          <p className="font-display text-2xl" style={headline}>
             {design.thanks ||
               "Thank you! Your moments are on their way to the hosts."}
           </p>
@@ -594,7 +590,7 @@ export function GuestView({
               <p className="text-[11px] uppercase tracking-[0.35em] text-stone-500">
                 Fae&amp;Fable Mirror Booth
               </p>
-              <h1 className="font-display mt-3 text-4xl leading-tight wrap-break-word">
+              <h1 className="font-display mt-3 text-4xl leading-tight wrap-break-word" style={headline}>
                 {design.title || event.name}
               </h1>
               {!design.hideDate && (
@@ -612,6 +608,8 @@ export function GuestView({
                 title={design.title || event.name}
                 pane={pane}
                 onShare={openSheet}
+                headline={headline}
+                noteStyle={{ template: design.noteTemplate, font: design.noteFont }}
               />
             )}
           </div>
@@ -630,7 +628,7 @@ export function GuestView({
               >
                 <path d="M12 5v14M5 12h14" />
               </svg>
-              {left === 0 ? "Leave a note" : "Share your photos"}
+              {left === 0 ? "Leave a note" : "Share a photo"}
             </button>
           )}
         </div>
@@ -657,8 +655,8 @@ export function GuestView({
             >
               <Icon name="x" />
             </button>
-            <h2 id="share-title" className="font-display text-2xl">
-              Share your photos
+            <h2 id="share-title" className="font-display text-2xl" style={headline}>
+              Share a photo
             </h2>
             {steps}
           </div>
@@ -674,12 +672,17 @@ function Wall({
   title,
   pane,
   onShare,
+  headline,
+  noteStyle,
 }: {
   photos: WallPhoto[];
   title: string;
   /** Pane template classes, matching the title card. */
   pane: string;
   onShare: () => void;
+  /** The event's headline font, if not the default. */
+  headline?: CSSProperties;
+  noteStyle?: { template?: NoteTemplate; font?: NoteFont };
 }) {
   const [filter, setFilter] = useState<"all" | "mine">("all");
   const mineCount = photos.filter((p) => p.mine).length;
@@ -713,6 +716,7 @@ function Wall({
           <h2
             id="moments-title"
             className="font-display mt-1 text-3xl leading-none sm:text-4xl"
+            style={headline}
           >
             Moments{" "}
             <span className="align-top text-base text-stone-500 sm:text-lg">
@@ -749,7 +753,7 @@ function Wall({
 
       {shown.length > 0 ? (
         <>
-          <Gallery photos={shown} title={title} layout="collage" onShare={onShare} />
+          <Gallery photos={shown} title={title} layout="collage" onShare={onShare} noteStyle={noteStyle} />
           <p className="mt-4 text-center text-xs text-stone-500">
             Tap a photo to view it full screen · updates live
           </p>
@@ -766,7 +770,7 @@ function Wall({
             ))}
           </div>
           <div>
-            <p className="font-display text-2xl">
+            <p className="font-display text-2xl" style={headline}>
               {filter === "mine" ? "You haven't shared yet" : "No moments yet"}
             </p>
             <p className="mt-1 text-sm text-stone-500">

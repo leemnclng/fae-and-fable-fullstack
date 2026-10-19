@@ -23,7 +23,11 @@ export class MemoryStore implements FileStore {
     return [...this.files.keys()].filter((k) => k.startsWith(`${bucket}/${prefix}`)).map((k) => k.slice(bucket.length + 1));
   }
 
+  /** Real storage takes a while to accept a file; a delay lets tests overlap concurrent uploads. */
+  putDelayMs = 0;
+
   async put(bucket: Bucket, key: string, body: Buffer, contentType: string) {
+    if (this.putDelayMs) await new Promise((r) => setTimeout(r, this.putDelayMs));
     this.files.set(`${bucket}/${key}`, { body, contentType });
   }
 

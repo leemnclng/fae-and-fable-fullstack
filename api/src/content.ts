@@ -8,7 +8,7 @@ import { contentTypeOf, extOf, imageUpload } from './uploads.js';
 
 // Catalog page JSON lives in settings too, but only the catalog endpoints may expose it.
 export const HIDDEN_SETTINGS = ['catalogDraft', 'catalogPublished'];
-const SETTING_KEYS = ['businessName', 'tagline', 'about', 'email', 'phone', 'instagram', 'location'];
+const SETTING_KEYS = ['businessName', 'tagline', 'about', 'email', 'phone', 'instagram', 'location', 'facebook'];
 
 @Controller()
 export class ContentController {
@@ -46,6 +46,12 @@ export class ContentController {
   @Put('admin/settings')
   @UseGuards(AdminGuard)
   async saveSettings(@Body() body: Record<string, unknown>) {
+    // The Inquire now buttons link here, so only a web address may be stored
+    if (typeof body.facebook === 'string') {
+      const facebook = body.facebook.trim();
+      if (facebook && !/^https?:\/\/\S+$/i.test(facebook)) throw new BadRequestException('facebook must be a link starting with https://');
+      body.facebook = facebook;
+    }
     for (const key of SETTING_KEYS) {
       if (typeof body[key] !== 'string') continue;
       await this.pg.exec('INSERT INTO $s.settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', [key, body[key]]);

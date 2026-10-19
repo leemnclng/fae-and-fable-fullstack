@@ -1,16 +1,22 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { FloatingNav } from "../floating-nav";
+import { Wordmark } from "@/components/wordmark";
+import { InquireNow } from "@/components/inquire-now";
+import type { Settings } from "@/lib/api";
 
-/** Header, footer and nav shared by /events and /events/[id]. */
+/** Header, footer and nav shared by the public pages other than the homepage. */
 export const GUTTER = "px-6 md:px-12";
 
-export function SiteChrome({ name, heroHasImage = false, children }: { name: string; heroHasImage?: boolean; children: ReactNode }) {
+export function SiteChrome({ settings, heroHasImage = false, children }: { settings: Settings; heroHasImage?: boolean; children: ReactNode }) {
+  const name = settings.businessName || "Fae&Fable";
   return (
     <main className="flex-1">
       <header className={`fixed inset-x-0 top-0 z-20 flex items-center justify-between bg-background/75 py-4 backdrop-blur ${GUTTER}`}>
-        <Link href="/" className="font-display text-xl">{name}</Link>
-        <Link href="/#contact" className="btn px-4 py-1.5">Book</Link>
+        <Link href="/" aria-label={`${name} home`}>
+          <Wordmark name={name} className="h-9 w-auto md:h-11" />
+        </Link>
+        <InquireNow settings={settings} />
       </header>
 
       {children}
@@ -25,7 +31,7 @@ export function SiteChrome({ name, heroHasImage = false, children }: { name: str
         links={[
           { href: "/catalog", label: "Catalog" },
           { href: "/events", label: "Events" },
-          { href: "/#contact", label: "Contact" },
+          { href: "/contact", label: "Contact" },
         ]}
       />
     </main>

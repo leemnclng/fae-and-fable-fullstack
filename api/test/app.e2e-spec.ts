@@ -89,6 +89,15 @@ describe('Fae&Fable API', () => {
     await http.put('/admin/banner').expect(401);
   });
 
+  it('stores the Facebook page the Inquire now button opens, only as a web link', async () => {
+    const http = request(app.getHttpServer());
+    await http.put('/admin/settings').set('Authorization', admin).send({ facebook: 'javascript:alert(1)' }).expect(400);
+    await http.put('/admin/settings').set('Authorization', admin).send({ facebook: ' https://facebook.com/faeandfable ' }).expect(200);
+    expect((await http.get('/content').expect(200)).body.settings.facebook).toBe('https://facebook.com/faeandfable');
+    await http.put('/admin/settings').set('Authorization', admin).send({ facebook: '' }).expect(200);
+    expect((await http.get('/content').expect(200)).body.settings.facebook).toBe('');
+  });
+
   describe('catalog products', () => {
     const products = '/admin/catalog/products';
     const create = (draft: object) => request(app.getHttpServer()).post(products).set('Authorization', admin).send({ draft });
@@ -251,6 +260,8 @@ describe('Fae&Fable API', () => {
     ).body;
     expect(event.qr).toMatch(/^data:image\/png;base64,/);
     const slug = event.guestUrl.split('/e/')[1];
+    // Several photos from one guest here; the per-device limit has its own test
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '0').expect(200);
     const clientToken = event.clientUrl.split('/c/')[1];
 
     await http.get(`/guest/${slug}`).expect(200);
@@ -396,19 +407,45 @@ describe('Fae&Fable API', () => {
     expect(store.has('public', saved.background)).toBe(false);
   });
 
+  it('lets the admin pick the note card template and the message and headline fonts', async () => {
+    const http = request(app.getHttpServer());
+    const ev = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Fonts', clientName: 'F', eventDate: new Date().toISOString().slice(0, 10) }).expect(201)).body;
+    const slug = ev.guestUrl.split('/e/')[1];
+    const design = (fields: Record<string, string>) => {
+      const req = http.put(`/admin/events/${ev.id}/design`).set('Authorization', admin);
+      for (const [k, v] of Object.entries(fields)) req.field(k, v);
+      return req;
+    };
+    await design({ noteTemplate: 'neon' }).expect(400);
+    await design({ noteFont: 'comic-sans' }).expect(400);
+    await design({ headlineFont: 'papyrus' }).expect(400);
+
+    const saved = (await design({ noteTemplate: 'midnight', noteFont: 'great-vibes', headlineFont: 'cinzel' }).expect(200)).body;
+    expect(saved).toMatchObject({ noteTemplate: 'midnight', noteFont: 'great-vibes', headlineFont: 'cinzel' });
+    expect((await http.get(`/guest/${slug}`).expect(200)).body.design).toMatchObject({ noteTemplate: 'midnight', noteFont: 'great-vibes', headlineFont: 'cinzel' });
+
+    // The defaults (classic cream, Caveat, Playfair) are stored as "unset", so existing events keep today's look
+    const reset = (await design({ noteTemplate: 'cream', noteFont: 'caveat', headlineFont: 'playfair' }).expect(200)).body;
+    expect(reset).not.toHaveProperty('noteTemplate');
+    expect(reset).not.toHaveProperty('noteFont');
+    expect(reset).not.toHaveProperty('headlineFont');
+  });
+
   it('shows guests every note beside its photo only while the admin allows it', async () => {
     const http = request(app.getHttpServer());
     const event = (
       await http.post('/admin/events').set('Authorization', admin).send({ name: 'Notes Party', clientName: 'N', eventDate: new Date().toISOString().slice(0, 10), passcode: 'notes' }).expect(201)
     ).body;
     const slug = event.guestUrl.split('/e/')[1];
+    // Several photos from one guest here; the per-device limit has its own test
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '0').expect(200);
     const unlock = async (name: string) => (await http.post(`/guest/${slug}/unlock`).send({ name, passcode: 'notes' }).expect(201)).body.token as string;
     const share = async (token: string, message: string) => {
       const note = (await http.post(`/guest/${slug}/messages`).set('Authorization', `Bearer ${token}`).send({ message }).expect(201)).body;
       await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${token}`).field('messageId', String(note.id)).attach('photos', JPEG, 'p.jpg').expect(201);
     };
     const wall = async (token: string) => (await http.get(`/guest/${slug}/wall`).set('Authorization', `Bearer ${token}`).expect(200)).body.photos;
-    const setNotes = (on: boolean) => http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('showMessages', String(on)).expect(200);
+    const setNotes = (on: boolean) => http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '0').field('showMessages', String(on)).expect(200);
     const [ana, ben] = [await unlock('Tita Ana'), await unlock('Ben')];
 
     await share(ana, 'Written before the switch');
@@ -435,6 +472,8 @@ describe('Fae&Fable API', () => {
       await http.post('/admin/events').set('Authorization', admin).send({ name: 'Wall Party', clientName: 'W', eventDate: new Date().toISOString().slice(0, 10), passcode: 'wall' }).expect(201)
     ).body;
     const slug = event.guestUrl.split('/e/')[1];
+    // Several photos from one guest here; the per-device limit has its own test
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '0').expect(200);
     const clientToken = event.clientUrl.split('/c/')[1];
     const unlock = async (name: string) => (await http.post(`/guest/${slug}/unlock`).send({ name, passcode: 'wall' }).expect(201)).body.token as string;
     const [ana, ben] = [await unlock('Tita Ana'), await unlock('Ben')];
@@ -530,7 +569,9 @@ describe('Fae&Fable API', () => {
     const old = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Old', clientName: 'O', eventDate: today, passcode: 'oldy' }).expect(201)).body;
     const live = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Live', clientName: 'L', eventDate: today, passcode: 'live' }).expect(201)).body;
     const slug = old.guestUrl.split('/e/')[1];
-    const background = (await http.put(`/admin/events/${old.id}/design`).set('Authorization', admin).attach('background', JPEG, 'bg.jpg').expect(200)).body.background as string;
+    // Several photos from one guest here; the per-device limit has its own test
+    await http.put(`/admin/events/${old.id}/design`).set('Authorization', admin).field('photoLimit', '0').expect(200);
+    const background = (await http.put(`/admin/events/${old.id}/design`).set('Authorization', admin).field('photoLimit', '0').attach('background', JPEG, 'bg.jpg').expect(200)).body.background as string;
     const token = (await http.post(`/guest/${slug}/unlock`).send({ name: 'G', passcode: 'oldy' }).expect(201)).body.token;
     for (const n of ['1.jpg', '2.jpg']) await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${token}`).attach('photos', JPEG, n).expect(201);
     const photoKeys = store.keys('private', `events/${old.id}/`);
@@ -549,6 +590,8 @@ describe('Fae&Fable API', () => {
     const http = request(app.getHttpServer());
     const ev = (await http.post('/admin/events').set('Authorization', admin).send({ name: 'Retry', clientName: 'R', eventDate: new Date().toISOString().slice(0, 10), passcode: 'rtry' }).expect(201)).body;
     const slug = ev.guestUrl.split('/e/')[1];
+    // Several photos from one guest here; the per-device limit has its own test
+    await http.put(`/admin/events/${ev.id}/design`).set('Authorization', admin).field('photoLimit', '0').expect(200);
     const token = (await http.post(`/guest/${slug}/unlock`).send({ name: 'G', passcode: 'rtry' }).expect(201)).body.token;
     for (const n of ['1.jpg', '2.jpg', '3.jpg']) await http.post(`/guest/${slug}/photos`).set('Authorization', `Bearer ${token}`).attach('photos', JPEG, n).expect(201);
     const keys = store.keys('private', `events/${ev.id}/`);
@@ -575,43 +618,64 @@ describe('Fae&Fable API', () => {
     await http.delete(`/admin/events/${ev.id}`).set('Authorization', admin).expect(200);
   });
 
-  it('requires a guest name and limits photos per guest name', async () => {
+  it('requires a guest name and limits photos per device, one by default', async () => {
     const http = request(app.getHttpServer());
     const event = (
       await http.post('/admin/events').set('Authorization', admin).send({ name: 'Limit Party', clientName: 'L', eventDate: new Date().toISOString().slice(0, 10), passcode: 'snap' }).expect(201)
     ).body;
     const slug = event.guestUrl.split('/e/')[1];
     const clientToken = event.clientUrl.split('/c/')[1];
-    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', 'many').expect(400);
-    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '3').expect(200);
+    const unlock = async (name: string, device?: string) => (await http.post(`/guest/${slug}/unlock`).send({ name, passcode: 'snap', device }).expect(201)).body;
+    const up = (auth: string) => http.post(`/guest/${slug}/photos`).set('Authorization', auth).attach('photos', JPEG, 'p.jpg');
 
     await http.post(`/guest/${slug}/unlock`).send({ passcode: 'snap' }).expect(400);
     await http.post(`/guest/${slug}/unlock`).send({ name: '   ', passcode: 'snap' }).expect(400);
-    const first = (await http.post(`/guest/${slug}/unlock`).send({ name: '  Mia   Cruz ', passcode: 'snap' }).expect(201)).body;
-    expect(first).toMatchObject({ name: 'Mia Cruz', uploaded: 0, limit: 3 });
+
+    // Default: one photo per device, and a new name on the same phone doesn't reset it
+    const first = await unlock('  Mia   Cruz ', 'phone-mia-0001');
+    expect(first).toMatchObject({ name: 'Mia Cruz', uploaded: 0, limit: 1, device: 'phone-mia-0001' });
+    await up(`Bearer ${first.token}`).expect(201);
+    expect((await up(`Bearer ${first.token}`).expect(400)).body.message).toMatch(/maximum of 1 photo for/);
+    const renamed = await unlock('Not Mia', 'phone-mia-0001');
+    expect(renamed).toMatchObject({ uploaded: 1, limit: 1 });
+    await up(`Bearer ${renamed.token}`).expect(400);
+
+    // Same name on another phone is another guest; a missing or malformed device id gets a fresh one from the server
+    const otherPhone = await unlock('Mia Cruz', 'phone-other-0002');
+    expect(otherPhone).toMatchObject({ uploaded: 0 });
+    await up(`Bearer ${otherPhone.token}`).expect(201);
+    const noDevice = await unlock('Leo', '<script>');
+    expect(noDevice.device).toMatch(/^[\w-]{8,64}$/);
+    expect(noDevice.device).not.toBe('<script>');
+
+    // Uploads fired at once can't slip past the limit, and the refused ones leave no files behind
+    const racer = await unlock('Racer', 'phone-race-0003');
+    store.putDelayMs = 50;
+    const results = await Promise.all(Array.from({ length: 5 }, () => up(`Bearer ${racer.token}`))).finally(() => (store.putDelayMs = 0));
+    expect(results.map((r) => r.status).sort()).toEqual([201, 400, 400, 400, 400]);
+    expect((await unlock('Racer', 'phone-race-0003')).uploaded).toBe(1);
+    expect(store.keys('private', `events/${event.id}/`)).toHaveLength(3);
+
+    // The admin can raise the limit per event; 0 means unlimited
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', 'many').expect(400);
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '3').expect(200);
     const mia = `Bearer ${first.token}`;
-
-    const up = (auth: string) => http.post(`/guest/${slug}/photos`).set('Authorization', auth).attach('photos', JPEG, 'p.jpg');
     await up(mia).expect(201);
-    expect((await up(mia).expect(201)).body).toMatchObject({ uploaded: 2, limit: 3, added: 1 });
-
-    // Same name in a fresh session (another phone, different capitalisation) shares the same allowance
-    const again = (await http.post(`/guest/${slug}/unlock`).send({ name: 'mia cruz', passcode: 'snap' }).expect(201)).body;
-    expect(again).toMatchObject({ uploaded: 2, limit: 3 });
-    await up(`Bearer ${again.token}`).expect(201);
-    expect((await up(`Bearer ${again.token}`).expect(400)).body.message).toMatch(/maximum of 3/);
+    expect((await up(mia).expect(201)).body).toMatchObject({ uploaded: 3, limit: 3, added: 1 });
+    expect((await up(mia).expect(400)).body.message).toMatch(/maximum of 3 photos/);
     expect((await http.get(`/guest/${slug}/me`).set('Authorization', mia).expect(200)).body).toEqual({ name: 'Mia Cruz', uploaded: 3, limit: 3 });
-
-    // Another guest has their own allowance; 0 means unlimited
-    const leo = `Bearer ${(await http.post(`/guest/${slug}/unlock`).send({ name: 'Leo', passcode: 'snap' })).body.token}`;
-    for (let i = 0; i < 3; i++) await up(leo).expect(201);
-    await up(leo).expect(400);
+    const leo = `Bearer ${noDevice.token}`;
     await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('photoLimit', '0').expect(200);
-    await up(leo).expect(201);
+    for (let i = 0; i < 4; i++) await up(leo).expect(201);
     expect((await up(leo).expect(201)).body).toMatchObject({ uploaded: 5, limit: null });
+
+    // Wall marks a guest's own photos by device
+    await http.put(`/admin/events/${event.id}/design`).set('Authorization', admin).field('showWall', 'true').expect(200);
+    const wall = (await http.get(`/guest/${slug}/wall`).set('Authorization', `Bearer ${otherPhone.token}`).expect(200)).body;
+    expect(wall.photos.filter((p: { mine: boolean }) => p.mine)).toHaveLength(1);
 
     // The client sees who shared each photo
     const gallery = (await http.get(`/client/${clientToken}`).expect(200)).body;
-    expect(gallery.photos.map((p: { by: string }) => p.by).sort()).toEqual(['Leo', 'Leo', 'Leo', 'Leo', 'Leo', 'Mia Cruz', 'Mia Cruz', 'mia cruz']); // names kept as each session typed them
+    expect(gallery.photos.map((p: { by: string }) => p.by).sort()).toEqual(['Leo', 'Leo', 'Leo', 'Leo', 'Leo', 'Mia Cruz', 'Mia Cruz', 'Mia Cruz', 'Mia Cruz', 'Racer']);
   });
 });

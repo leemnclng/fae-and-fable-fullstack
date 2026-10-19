@@ -1,6 +1,11 @@
+import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
-import { api, fileUrl, type SiteContent } from "@/lib/api";
+import { api, fileUrl, formatDate, type PublicCatalog, type Showcase, type SiteContent } from "@/lib/api";
+import { Icon } from "@/components/icon";
+import { PhotoPlaceholder } from "@/components/catalog/section-shell";
 import { FloatingNav } from "./floating-nav";
+import { Wordmark } from "@/components/wordmark";
+import { InquireNow } from "@/components/inquire-now";
 
 export default function Home() {
   return (
@@ -15,9 +20,13 @@ export default function Home() {
 const GUTTER = "px-6 md:px-12";
 
 async function Site() {
-  const { settings } = await api<SiteContent>("/content").catch(
-    (): SiteContent => ({ settings: {} }),
-  );
+  const [{ settings }, catalog, showcases] = await Promise.all([
+    api<SiteContent>("/content").catch((): SiteContent => ({ settings: {} })),
+    api<PublicCatalog>("/catalog").catch((): PublicCatalog => ({ sections: [], products: [] })),
+    api<Showcase[]>("/showcases").catch((): Showcase[] => []),
+  ]);
+  // Mirrors first, then packages, as on the catalog page
+  const products = [...catalog.products].sort((a, b) => (a.type === b.type ? 0 : a.type === "mirror" ? -1 : 1)).slice(0, 3);
   const name = settings.businessName || "Fae&Fable";
   const hero = settings.banner;
 
@@ -26,12 +35,10 @@ async function Site() {
       <header
         className={`fixed inset-x-0 top-0 z-20 flex items-center justify-between bg-background/75 py-4 backdrop-blur ${GUTTER}`}
       >
-        <a href="#top" className="font-display text-xl">
-          {name}
+        <a href="#top" aria-label={`${name}, back to top`}>
+          <Wordmark name={name} className="h-9 w-auto md:h-11" />
         </a>
-        <a href="#contact" className="btn px-4 py-1.5">
-          Book
-        </a>
+        <InquireNow settings={settings} />
       </header>
 
       {/* Full-screen hero */}
@@ -62,12 +69,10 @@ async function Site() {
             <p className="max-w-xl text-lg md:text-2xl">
               {settings.tagline || "Reflect the magic of your event"}
             </p>
-            <a
-              href="#contact"
+            <InquireNow
+              settings={settings}
               className={`btn w-fit px-8 py-3 text-base ${hero ? "" : "bg-white"}`}
-            >
-              Book the mirror
-            </a>
+            />
           </div>
         </div>
       </section>
@@ -84,36 +89,68 @@ async function Site() {
         </section>
       )}
 
-      {/* Contact: oversized call to action */}
-      <section id="contact" className={`scroll-mt-16 py-24 md:py-40 ${GUTTER}`}>
-        <p className="text-xs uppercase tracking-[0.35em] text-accent-ink">
-          Book the mirror
-        </p>
-        <h2 className="font-display mt-6 text-4xl leading-tight md:text-7xl">
-          Let&apos;s make your event shine.
-        </h2>
-        {settings.email && (
-          <a
-            href={`mailto:${settings.email}`}
-            className="font-display mt-8 block break-all text-[9vw] leading-none underline decoration-accent decoration-2 underline-offset-8 md:text-[6vw]"
-          >
-            {settings.email}
-          </a>
+      {/* Quick views of the other pages, each with a way through */}
+      <Preview eyebrow="Catalog" title="Mirrors & packages" href="/catalog" tint>
+        {products.length ? (
+          <ul className="grid gap-x-6 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
+            {products.map((p) => (
+              <li key={p.id}>
+                <Link href={`/catalog/${p.id}`} className="group block">
+                  <div className="aspect-4/5 overflow-hidden bg-accent">
+                    {p.photos[0] ? (
+                      <img src={fileUrl(p.photos[0])} alt="" loading="lazy" className="h-full w-full object-cover transition duration-700 group-hover:scale-105 motion-reduce:transition-none" />
+                    ) : (
+                      <PhotoPlaceholder className="h-full w-full" />
+                    )}
+                  </div>
+                  <p className="mt-4 text-xs uppercase tracking-[0.25em] text-stone-500">{p.type === "mirror" ? "Mirror" : "Package"}</p>
+                  <h3 className="font-display mt-1 text-2xl transition-colors group-hover:text-accent-ink md:text-3xl">{p.name}</h3>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-stone-500">Our mirrors and packages are coming soon.</p>
         )}
-        <div className="mt-12 grid gap-6 text-sm sm:grid-cols-3">
-          {settings.phone && (
-            <Detail label="Phone">
-              <a href={`tel:${settings.phone}`}>{settings.phone}</a>
-            </Detail>
-          )}
-          {settings.instagram && (
-            <Detail label="Instagram">{settings.instagram}</Detail>
-          )}
-          {settings.location && (
-            <Detail label="Based in">{settings.location}</Detail>
+      </Preview>
+
+      <Preview eyebrow="Events" title="Celebrations we've reflected" href="/events">
+        {showcases.length ? (
+          <ul className="grid gap-x-2 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
+            {showcases.slice(0, 3).map((show) => (
+              <li key={show.id}>
+                <Link href={`/events/${show.id}`} className="group block">
+                  <div className="relative aspect-4/5 overflow-hidden bg-accent">
+                    {show.cover ? (
+                      <img src={fileUrl(show.cover)} alt="" loading="lazy" className="h-full w-full object-cover transition duration-700 group-hover:scale-105 motion-reduce:transition-none" />
+                    ) : (
+                      <span className="font-display absolute inset-0 flex items-center justify-center p-6 text-center text-3xl text-foreground/70">{show.title}</span>
+                    )}
+                  </div>
+                  <p className="mt-4 text-xs uppercase tracking-[0.25em] text-stone-500">
+                    {formatDate(show.eventDate)}
+                    {show.location && ` · ${show.location}`}
+                  </p>
+                  <h3 className="font-display mt-1 text-2xl transition-colors group-hover:text-accent-ink md:text-3xl">{show.title}</h3>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-stone-500">Past events will appear here soon. At an event today? You can share your photos there.</p>
+        )}
+      </Preview>
+
+      <Preview eyebrow="Contact Us" title="Let's make your event shine." href="/contact" tint>
+        <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
+          <InquireNow settings={settings} className="btn w-fit px-8 py-3 text-base" />
+          {settings.email && (
+            <a href={`mailto:${settings.email}`} className="break-all text-lg underline decoration-accent decoration-2 underline-offset-4">
+              {settings.email}
+            </a>
           )}
         </div>
-      </section>
+      </Preview>
 
       {/* pb-24 keeps the footer text clear of the floating nav */}
       <footer
@@ -128,20 +165,33 @@ async function Site() {
         links={[
           { href: "/catalog", label: "Catalog" },
           { href: "/events", label: "Events" },
-          { href: "#contact", label: "Contact" },
+          { href: "/contact", label: "Contact" },
         ]}
       />
     </main>
   );
 }
 
-function Detail({ label, children }: { label: string; children: ReactNode }) {
+/** A homepage teaser for another page: heading, a few items, and "See more". */
+function Preview({ eyebrow, title, href, tint, children }: { eyebrow: string; title: string; href: string; tint?: boolean; children: ReactNode }) {
   return (
-    <div>
-      <p className="text-xs uppercase tracking-[0.25em] text-stone-500">
-        {label}
-      </p>
-      <p className="mt-1 text-base">{children}</p>
-    </div>
+    <section className={`py-20 md:py-28 ${tint ? "bg-white" : ""} ${GUTTER}`}>
+      <div className="mb-10 flex flex-col gap-4 md:mb-14 md:flex-row md:items-end md:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.35em] text-accent-ink">{eyebrow}</p>
+          <h2 className="font-display mt-4 text-4xl leading-tight md:text-6xl">{title}</h2>
+        </div>
+        <SeeMore href={href} label={eyebrow} />
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function SeeMore({ href, label }: { href: string; label: string }) {
+  return (
+    <Link href={href} aria-label={`See more: ${label}`} className="inline-flex w-fit shrink-0 items-center gap-3 border-b border-foreground pb-1 text-sm transition-colors hover:border-accent-ink hover:text-accent-ink">
+      See more <Icon name="arrow-right" />
+    </Link>
   );
 }

@@ -27,7 +27,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
 import { AdminGuard, bearer, safeEqual, TokenPayload } from './auth.js';
 import { config } from './config.js';
@@ -70,9 +70,24 @@ export type EventRow = {
 type Design = { photoLimit?: number; title?: string; dateText?: string; hideDate?: boolean; message?: string; uploadMessage?: string; thanks?: string; color?: string; background?: string; showWall?: boolean; panel?: Panel;
   /** Guests' notes show beside their photos on the wall. */
   showMessages?: boolean;
+  noteTemplate?: (typeof NOTE_TEMPLATES)[number];
+  noteFont?: (typeof NOTE_FONTS)[number];
+  headlineFont?: (typeof HEADLINE_FONTS)[number];
   /** Legacy form of showMessages (it once limited notes to newer ones); still means "on". */
   notesAfterId?: number };
 const PANELS = ['glass', 'soft', 'solid', 'tint'] as const;
+// Note card look and fonts the admin picks per event; the first of each is the default and is stored as "unset".
+// Keep in sync with web/src/lib/event-style.ts.
+export const NOTE_TEMPLATES = ['cream', 'letter', 'lined', 'midnight', 'polaroid'] as const;
+export const NOTE_FONTS = ['caveat', 'dancing-script', 'great-vibes', 'homemade-apple', 'shadows-into-light', 'kalam', 'playfair-italic'] as const;
+export const HEADLINE_FONTS = ['playfair', 'cormorant', 'cinzel', 'great-vibes', 'bodoni'] as const;
+
+/** An allowed choice, or undefined for empty or the default; anything else is a 400. */
+function pick<T extends string>(field: string, value: string | undefined, allowed: readonly T[]): T | undefined {
+  if (!value) return undefined;
+  if (!allowed.includes(value as T)) throw new BadRequestException(`${field} must be one of ${allowed.join(', ')}`);
+  return value === allowed[0] ? undefined : (value as T);
+}
 type Panel = (typeof PANELS)[number];
 
 const parseDesign = (row: EventRow): Design => row.design ?? {};
@@ -88,15 +103,25 @@ export function designDto(row: EventRow) {
 const DESIGN_LIMITS = { title: 80, dateText: 80, message: 600, uploadMessage: 600, thanks: 300 } as const;
 
 /** `file` is the photo's key in the private bucket (events/<eventId>/<uuid>.<ext>). */
-type PhotoRow = { id: number; event_id: number; file: string; message_id: number | null; guest_name: string | null; created_at: Date };
+type PhotoRow = { id: number; event_id: number; file: string; message_id: number | null; guest_name: string | null; device_id: string | null; created_at: Date };
 
-/** Photos one guest (by name) may share per event when the admin hasn't set a limit. */
-export const DEFAULT_PHOTO_LIMIT = 30;
+/** Photos one guest device may share per event when the admin hasn't set a limit. */
+export const DEFAULT_PHOTO_LIMIT = 1;
 const limitOf = (row: EventRow) => {
   const limit = parseDesign(row).photoLimit ?? DEFAULT_PHOTO_LIMIT;
   return limit > 0 ? limit : null; // 0 = unlimited
 };
-type GuestRequest = Request & { guestName?: string };
+/** Refuses an upload that would take a guest past the event's limit. */
+function overLimit(quota: { uploaded: number; limit: number | null }, adding: number) {
+  if (quota.limit === null || quota.uploaded + adding <= quota.limit) return;
+  const left = Math.max(0, quota.limit - quota.uploaded);
+  throw new BadRequestException(
+    left
+      ? `You can share ${left} more ${left === 1 ? 'photo' : 'photos'} at this event.`
+      : `You've shared the maximum of ${quota.limit} ${quota.limit === 1 ? 'photo' : 'photos'} for this event. Thank you!`,
+  );
+}
+type GuestRequest = Request & { guestName?: string; device?: string };
 type MessageRow = { id: number; event_id: number; name: string; body: string; created_at: Date };
 const isExpired = (row: EventRow) => row.expires_at.getTime() <= Date.now();
 
@@ -143,9 +168,9 @@ export class EventsService {
     return this.pg.one<PhotoRow>('SELECT * FROM $s.photos WHERE event_id = ? ORDER BY id DESC LIMIT 1', [eventId]);
   }
 
-  /** How many photos this guest name has shared, case-insensitively, against the event's limit. */
-  async quota(event: EventRow, name: string) {
-    const row = await this.pg.one<{ n: number }>('SELECT COUNT(*)::int AS n FROM $s.photos WHERE event_id = ? AND lower(guest_name) = lower(?)', [event.id, name]);
+  /** How many photos this device has shared against the event's limit; a new name on the same phone doesn't reset it. */
+  async quota(event: EventRow, name: string, device: string) {
+    const row = await this.pg.one<{ n: number }>('SELECT COUNT(*)::int AS n FROM $s.photos WHERE event_id = ? AND device_id = ?', [event.id, device]);
     return { name, uploaded: row?.n ?? 0, limit: limitOf(event) };
   }
 
@@ -169,9 +194,10 @@ export class GuestGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest<Request>();
     const event = await this.events.active('slug', String(req.params.slug));
     const token = bearer(req, this.jwt);
-    // Tokens from before names were required have no name: send those guests back to the passcode step
-    if (token?.scope === 'guest' && token.eventId === event.id && token.name) {
+    // Tokens from before names (or devices) were required lack them: send those guests back to the passcode step
+    if (token?.scope === 'guest' && token.eventId === event.id && token.name && token.device) {
       (req as GuestRequest).guestName = token.name;
+      (req as GuestRequest).device = token.device;
       return true;
     }
     throw new UnauthorizedException('Enter your name and the event passcode first');
@@ -246,7 +272,7 @@ export class AdminEventsController {
   @UseInterceptors(FileInterceptor('background', imageUpload()))
   async saveDesign(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: Partial<Record<'photoLimit' | 'title' | 'dateText' | 'hideDate' | 'message' | 'uploadMessage' | 'thanks' | 'color' | 'removeBackground' | 'showWall' | 'panel' | 'showMessages', string>>,
+    @Body() body: Partial<Record<'photoLimit' | 'title' | 'dateText' | 'hideDate' | 'message' | 'uploadMessage' | 'thanks' | 'color' | 'removeBackground' | 'showWall' | 'panel' | 'showMessages' | 'noteTemplate' | 'noteFont' | 'headlineFont', string>>,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const event = await this.events.find(id);
@@ -267,6 +293,9 @@ export class AdminEventsController {
     design.showWall = body.showWall === 'false' ? false : undefined;
     design.hideDate = body.hideDate === 'true' ? true : undefined;
     design.showMessages = body.showMessages === 'true' ? true : undefined;
+    design.noteTemplate = pick('noteTemplate', body.noteTemplate, NOTE_TEMPLATES);
+    design.noteFont = pick('noteFont', body.noteFont, NOTE_FONTS);
+    design.headlineFont = pick('headlineFont', body.headlineFont, HEADLINE_FONTS);
     design.notesAfterId = undefined;
     if (body.photoLimit !== undefined && body.photoLimit !== '') {
       const limit = Number(body.photoLimit);
@@ -341,7 +370,7 @@ export class GuestController {
   }
 
   @Post('unlock')
-  async unlock(@Param('slug') slug: string, @Body() body: { passcode?: string; name?: string }) {
+  async unlock(@Param('slug') slug: string, @Body() body: { passcode?: string; name?: string; device?: string }) {
     const event = await this.events.active('slug', slug);
     const name = String(body.name ?? '').trim().replace(/\s+/g, ' ');
     if (!name) throw new BadRequestException('Please enter your name');
@@ -349,16 +378,18 @@ export class GuestController {
     if (!safeEqual(String(body.passcode ?? '').trim().toUpperCase(), event.passcode.toUpperCase())) {
       throw new UnauthorizedException('Wrong passcode');
     }
-    const payload: TokenPayload = { scope: 'guest', eventId: event.id, name };
+    // The page keeps this id and sends it back on every unlock; anything odd gets a fresh one
+    const device = typeof body.device === 'string' && /^[\w-]{8,64}$/.test(body.device) ? body.device : randomUUID();
+    const payload: TokenPayload = { scope: 'guest', eventId: event.id, name, device };
     const ttl = Math.max(60, Math.floor((event.expires_at.getTime() - Date.now()) / 1000));
-    return { token: this.jwt.sign(payload, { expiresIn: ttl }), ...(await this.events.quota(event, name)) };
+    return { token: this.jwt.sign(payload, { expiresIn: ttl }), device, ...(await this.events.quota(event, name, device)) };
   }
 
   /** The signed-in guest's name and remaining photo allowance. */
   @Get('me')
   @UseGuards(GuestGuard)
   async me(@Param('slug') slug: string, @Req() req: GuestRequest) {
-    return this.events.quota(await this.events.active('slug', slug), req.guestName!);
+    return this.events.quota(await this.events.active('slug', slug), req.guestName!, req.device!);
   }
 
   /** One photo per request: browsers resize first (≤2560 px), keeping each request under the host's body limit. */
@@ -373,15 +404,8 @@ export class GuestController {
   ) {
     if (!files?.length) throw new BadRequestException('No photos received');
     const event = await this.events.active('slug', slug);
-    const quota = await this.events.quota(event, req.guestName!);
-    if (quota.limit !== null && quota.uploaded + files.length > quota.limit) {
-      const left = Math.max(0, quota.limit - quota.uploaded);
-      throw new BadRequestException(
-        left
-          ? `You can share ${left} more ${left === 1 ? 'photo' : 'photos'} at this event.`
-          : `You've shared the maximum of ${quota.limit} photos for this event. Thank you!`,
-      );
-    }
+    // Early refusal saves storing a file that can't be kept; the locked check below is the real guard
+    overLimit(await this.events.quota(event, req.guestName!, req.device!), files.length);
     let messageId: number | null = null;
     if (body.messageId) {
       messageId = Number(body.messageId);
@@ -391,9 +415,20 @@ export class GuestController {
     for (const file of files) {
       const key = `events/${event.id}/${newKey(extOf(file))}`;
       await this.store.put('private', key, file.buffer, contentTypeOf(file));
-      await this.pg.exec('INSERT INTO $s.photos (event_id, file, message_id, guest_name) VALUES (?, ?, ?, ?)', [event.id, key, messageId, req.guestName!]);
+      try {
+        await this.pg.tx(async (q) => {
+          // One upload per guest at a time, so simultaneous requests can't both pass the count
+          await q.query('SELECT pg_advisory_xact_lock(hashtext(?))', [`photos:${event.id}:${req.device!}`]);
+          const row = await q.one<{ n: number }>('SELECT COUNT(*)::int AS n FROM $s.photos WHERE event_id = ? AND device_id = ?', [event.id, req.device!]);
+          overLimit({ uploaded: row?.n ?? 0, limit: limitOf(event) }, 1);
+          await q.exec('INSERT INTO $s.photos (event_id, file, message_id, guest_name, device_id) VALUES (?, ?, ?, ?, ?)', [event.id, key, messageId, req.guestName!, req.device!]);
+        });
+      } catch (e) {
+        await this.store.remove('private', [key]).catch(() => undefined); // best effort: the refusal matters more than the orphan
+        throw e;
+      }
     }
-    return { ...(await this.events.quota(event, req.guestName!)), added: files.length };
+    return { ...(await this.events.quota(event, req.guestName!, req.device!)), added: files.length };
   }
 
   /** A private note for the client; photos uploaded right after can reference it via messageId. */
@@ -414,7 +449,6 @@ export class GuestController {
   @UseGuards(GuestGuard)
   async wall(@Param('slug') slug: string, @Req() req: GuestRequest) {
     const event = await this.events.active('slug', slug);
-    const me = req.guestName!.toLowerCase();
     const design = parseDesign(event);
     if (design.showWall === false) return { enabled: false, photos: [] };
     const notes = new Map<number, { name: string; body: string }>();
@@ -425,7 +459,7 @@ export class GuestController {
         id: p.id,
         url: `/guest/${slug}/photos/${p.id}`,
         // Only "is this yours", never whose: the wall stays anonymous
-        mine: p.guest_name?.toLowerCase() === me,
+        mine: p.device_id === req.device,
         createdAt: p.created_at.toISOString(),
         ...(p.message_id !== null && notes.has(p.message_id) && { note: notes.get(p.message_id) }),
       })),

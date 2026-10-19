@@ -25,11 +25,10 @@ async function Events() {
     api<PublicEvent[]>("/events").catch((): PublicEvent[] => []),
     api<Showcase[]>("/showcases").catch((): Showcase[] => []),
   ]);
-  const name = content.settings.businessName || "Fae&Fable";
   const [featured, ...rest] = past;
 
   return (
-    <SiteChrome name={name}>
+    <SiteChrome settings={content.settings}>
       {/* Intro */}
       <section className={`pt-32 pb-12 md:pt-44 md:pb-20 ${GUTTER}`}>
         <Eyebrow>Mirror Selfie Booth</Eyebrow>

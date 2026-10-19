@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { api, ApiError, fileUrl, formatDate, type ShowcaseDetail, type SiteContent } from "@/lib/api";
 import { Eyebrow, GUTTER, SiteChrome } from "../chrome";
+import { InquireNow } from "@/components/inquire-now";
 import { Gallery } from "@/components/gallery";
 import { Icon } from "@/components/icon";
 
@@ -24,12 +25,11 @@ async function PastEvent({ params }: { params: Promise<{ id: string }> }) {
       throw e;
     }),
   ]);
-  const name = content.settings.businessName || "Fae&Fable";
   const cover = show.photos[0];
   const photos = show.photos.map((p) => ({ id: p.id, url: fileUrl(p.file) }));
 
   return (
-    <SiteChrome name={name} heroHasImage={!!cover}>
+    <SiteChrome settings={content.settings} heroHasImage={!!cover}>
       <section id="top" className="relative flex h-[85svh] min-h-[28rem] items-end overflow-hidden bg-accent">
         {cover && (
           <>
@@ -71,7 +71,7 @@ async function PastEvent({ params }: { params: Promise<{ id: string }> }) {
         </Link>
         <div className="md:text-right">
           <p className="font-display text-3xl md:text-5xl">Planning something similar?</p>
-          <Link href="/#contact" className="btn mt-6 px-8 py-3 text-base">Book the mirror</Link>
+          <InquireNow settings={content.settings} className="btn mt-6 px-8 py-3 text-base" />
         </div>
       </section>
     </SiteChrome>

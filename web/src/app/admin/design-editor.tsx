@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { GuestView, PANELS, type GuestStep } from "@/components/guest-view";
 import { fileUrl, formatDate, type EventItem, type GuestDesign, type PanelStyle } from "@/lib/api";
+import { HEADLINE_FONTS, NOTE_FONTS, NOTE_TEMPLATES, type HeadlineFont, type NoteFont, type NoteTemplate } from "@/lib/event-style";
 import { resizeImage } from "@/lib/resize";
+import { NoteFace } from "@/components/note-face";
 
 const STEPS: { key: GuestStep; label: string }[] = [
   { key: "passcode", label: "Passcode" },
@@ -37,6 +39,9 @@ export function DesignEditor({
   const [showWall, setShowWall] = useState(event.design.showWall !== false);
   const [showMessages, setShowMessages] = useState(!!event.design.showMessages);
   const [panel, setPanel] = useState<PanelStyle>(event.design.panel ?? "glass");
+  const [noteTemplate, setNoteTemplate] = useState<NoteTemplate>(event.design.noteTemplate ?? "cream");
+  const [noteFont, setNoteFont] = useState<NoteFont>(event.design.noteFont ?? "caveat");
+  const [headlineFont, setHeadlineFont] = useState<HeadlineFont>(event.design.headlineFont ?? "playfair");
   const [photoLimit, setPhotoLimit] = useState(event.design.photoLimit?.toString() ?? "");
   const [step, setStep] = useState<GuestStep>("passcode");
   const [saving, setSaving] = useState(false);
@@ -48,11 +53,11 @@ export function DesignEditor({
   // Free local preview URLs once they're replaced; server URLs need no cleanup
   useEffect(() => () => void (bgPreview?.startsWith("blob:") && URL.revokeObjectURL(bgPreview)), [bgPreview]);
 
-  const design: GuestDesign = { photoLimit: photoLimit === "" ? undefined : Number(photoLimit), title, dateText, hideDate, message, uploadMessage, thanks, color, background: bgPreview, showWall, panel, showMessages };
+  const design: GuestDesign = { photoLimit: photoLimit === "" ? undefined : Number(photoLimit), title, dateText, hideDate, message, uploadMessage, thanks, color, background: bgPreview, showWall, panel, showMessages, noteTemplate, noteFont, headlineFont };
 
   async function submit() {
     const form = new FormData();
-    Object.entries({ photoLimit, title, dateText, hideDate: String(hideDate), message, uploadMessage, thanks, color, showWall: String(showWall), panel, showMessages: String(showWall && showMessages) }).forEach(([k, v]) => form.set(k, v));
+    Object.entries({ photoLimit, title, dateText, hideDate: String(hideDate), message, uploadMessage, thanks, color, showWall: String(showWall), panel, showMessages: String(showWall && showMessages), noteTemplate, noteFont, headlineFont }).forEach(([k, v]) => form.set(k, v));
     if (bgFile) form.set("background", await resizeImage(bgFile).catch(() => bgFile));
     else if (removeBg) form.set("removeBackground", "true");
     setSaving(true);
@@ -230,7 +235,22 @@ export function DesignEditor({
               </div>
             </Field>
 
-            <Field label="Photos per guest" hint="Guests enter their name before sharing; each name can share up to this many photos. Empty = 30, 0 = no limit.">
+            <Field label="Headline font" hint="The event title and headings on the guest page">
+              <ChoiceGrid
+                label="Headline font"
+                value={headlineFont}
+                onChange={setHeadlineFont}
+                options={(Object.keys(HEADLINE_FONTS) as HeadlineFont[]).map((key) => [
+                  key,
+                  HEADLINE_FONTS[key].label,
+                  <span key={key} className="flex h-14 items-center justify-center truncate rounded-lg bg-white px-2 text-xl" style={{ fontFamily: HEADLINE_FONTS[key].family }}>
+                    {title || event.name}
+                  </span>,
+                ])}
+              />
+            </Field>
+
+            <Field label="Photos per guest" hint="Each phone can share up to this many photos, even if the guest changes the name they enter. Empty = 1, 0 = no limit.">
               <input
                 type="number"
                 min={0}
@@ -238,7 +258,7 @@ export function DesignEditor({
                 value={photoLimit}
                 onChange={(e) => setPhotoLimit(e.target.value)}
                 onFocus={() => setStep("upload")}
-                placeholder="30"
+                placeholder="1"
                 className="input w-32"
               />
             </Field>
@@ -257,6 +277,40 @@ export function DesignEditor({
                   </span>
                 </label>
               )}
+            </Field>
+
+            <Field label="Note card" hint="How a guest's note looks when it opens beside their photo on the wall">
+              <ChoiceGrid
+                label="Note card"
+                value={noteTemplate}
+                onChange={setNoteTemplate}
+                options={(Object.keys(NOTE_TEMPLATES) as NoteTemplate[]).map((key) => [
+                  key,
+                  NOTE_TEMPLATES[key].label,
+                  <span key={key} className="block rounded-lg bg-[#0d0709] p-2">
+                    <NoteFace note={SAMPLE_NOTE} template={key} font={noteFont} compact className="h-24" />
+                  </span>,
+                ])}
+              />
+            </Field>
+
+            <Field label="Note handwriting" hint="The font guests' notes are written in">
+              <ChoiceGrid
+                label="Note handwriting"
+                value={noteFont}
+                onChange={setNoteFont}
+                options={(Object.keys(NOTE_FONTS) as NoteFont[]).map((key) => [
+                  key,
+                  NOTE_FONTS[key].label,
+                  <span
+                    key={key}
+                    className="flex h-14 items-center justify-center rounded-lg bg-[#fff9f4] px-2 text-foreground"
+                    style={{ fontFamily: NOTE_FONTS[key].family, fontStyle: NOTE_FONTS[key].fontStyle, fontSize: `calc(${NOTE_FONTS[key].scale} * 1.6rem)` }}
+                  >
+                    With love
+                  </span>,
+                ])}
+              />
             </Field>
 
             <p role="status" className={`text-sm ${status.startsWith("Saved") ? "text-green-700" : "text-red-600"}`}>{status}</p>
@@ -291,7 +345,7 @@ export function DesignEditor({
                   setStep("upload");
                 }}
                 wall={showWall ? [] : null}
-                guest={{ name: "Guest name", uploaded: 0, limit: photoLimit === "" ? 30 : Number(photoLimit) || null }}
+                guest={{ name: "Guest name", uploaded: 0, limit: photoLimit === "" ? 1 : Number(photoLimit) || null }}
                 onUpload={async (_files, _note, onProgress) => {
                   for (let p = 0; p <= 1; p += 0.1) {
                     onProgress(p);
@@ -315,6 +369,39 @@ function Field({ label, hint, children }: { label: string; hint: string; childre
       <p className="text-sm font-medium">{label}</p>
       <p className="mb-2 text-xs text-stone-500">{hint}</p>
       {children}
+    </div>
+  );
+}
+
+const SAMPLE_NOTE = { name: "Ana", body: "To the best couple! May your love shine as bright as tonight." };
+
+/** A row of preview tiles acting as a radio group. */
+function ChoiceGrid<T extends string>({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: T;
+  onChange: (v: T) => void;
+  options: [T, string, ReactNode][];
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {options.map(([key, text, preview]) => (
+        <button
+          key={key}
+          type="button"
+          role="radio"
+          aria-checked={value === key}
+          onClick={() => onChange(key)}
+          className={`cursor-pointer rounded-xl border-2 p-1.5 text-left text-sm transition ${value === key ? "border-foreground" : "border-transparent hover:border-stone-300"}`}
+        >
+          {preview}
+          <span className="mt-1.5 block">{text}</span>
+        </button>
+      ))}
     </div>
   );
 }

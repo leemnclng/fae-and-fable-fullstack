@@ -12,7 +12,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
 import { config } from './config.js';
 
-export type TokenPayload = { scope: 'admin' } | { scope: 'guest'; eventId: number; name: string };
+export type TokenPayload = { scope: 'admin' } | { scope: 'guest'; eventId: number; name: string; device: string };
 
 export function safeEqual(a: string, b: string) {
   const hash = (s: string) => createHash('sha256').update(s).digest();

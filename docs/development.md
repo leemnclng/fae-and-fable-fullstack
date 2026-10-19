@@ -10,7 +10,7 @@ Prerequisites: Node.js 22+, npm, pnpm for the API, and a Postgres + Supabase Sto
 ./scripts/run.sh
 ```
 
-The runner installs missing dependencies, creates missing env files, runs `pnpm db:migrate`, and starts both services. Ctrl+C stops both.
+The runner installs missing dependencies, creates missing env files, runs `pnpm db:bootstrap`, and starts both services. Ctrl+C stops both.
 
 | Service | Local URL | Package manager |
 | --- | --- | --- |
@@ -38,10 +38,12 @@ Use `api/.env.example` and `web/.env.example` as the templates; they document ev
 Schema changes are numbered SQL files in `api/migrations/`; every table name is written `$s.<table>` and runs inside `DB_SCHEMA`.
 
 ```bash
-cd api && pnpm db:migrate   # applies pending migrations and creates the storage buckets
+cd api && pnpm db:migrate     # applies pending migrations
+cd api && pnpm db:bootstrap   # the same, then creates the storage buckets (local setup; once per new Supabase project)
 ```
 
-Migrations never run when the API starts. Run them locally, and as a release step before deploying a new API version.
+- **Never at API startup.** Migrations run from these commands, or from the API's Vercel build in production.
+- **Additive only.** A production build migrates before the new version goes live, while the previous version is still serving. So a migration must keep the previous version working: add tables and columns freely, but drop or rename in two releases (stop using it first, remove it next).
 
 ## Checks
 
@@ -68,7 +70,8 @@ The API tests need the local Postgres. Each run creates a throwaway `fae_fable_t
 **Vercel:** two projects from this repo.
 - **Website:** Root Directory `web`. Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_FILES_URL`.
 - **API:** Root Directory `api`. Vercel's NestJS support runs `src/main.ts` as one function. Set every `api/.env` variable, with `WEB_URL` = the website's address(es).
-- **Each release:** run `pnpm db:migrate` against production.
+- **New Supabase project (once):** from your machine, run `pnpm db:bootstrap` in `api/` with the production `DATABASE_URL`, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. It creates the tables and both storage buckets.
+- **Each release:** migrations run automatically. `api/vercel.json` makes the build run `pnpm db:migrate:deploy` after compiling, which migrates only when `VERCEL_ENV=production`, so preview builds never touch the live database. A failed migration fails the build, and the previous version keeps serving.
 - **Uploads:** browsers resize photos to ≤2560 px and send one per request, so each request stays under Vercel's ~4.5 MB body limit. The API refuses files over 4 MB.
 
 **Docker:** `api/Dockerfile` and `web/Dockerfile` build standalone images, and `docker-compose.yml` runs both.

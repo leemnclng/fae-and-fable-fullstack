@@ -5,7 +5,7 @@ import { fileUrl, type Settings, type SiteContent } from "@/lib/api";
 import { useAdmin, type AdminProps } from "./use-admin";
 import { resizeImage } from "@/lib/resize";
 
-const FIELDS: { key: keyof Settings; label: string; multiline?: boolean }[] = [
+const FIELDS: { key: keyof Settings; label: string; multiline?: boolean; placeholder?: string }[] = [
   { key: "businessName", label: "Business name" },
   { key: "tagline", label: "Hero tagline" },
   { key: "about", label: "About", multiline: true },
@@ -13,6 +13,7 @@ const FIELDS: { key: keyof Settings; label: string; multiline?: boolean }[] = [
   { key: "phone", label: "Contact phone" },
   { key: "instagram", label: "Instagram handle" },
   { key: "location", label: "Service area / location" },
+  { key: "facebook", label: "Facebook page link (Inquire now buttons)", placeholder: "https://facebook.com/yourpage" },
 ];
 
 export function SettingsForm(props: AdminProps) {
@@ -80,13 +81,13 @@ export function SettingsForm(props: AdminProps) {
       </section>
 
       <form action={save} className="card grid gap-x-6 gap-y-4 md:grid-cols-2">
-        {FIELDS.map(({ key, label, multiline }) => (
+        {FIELDS.map(({ key, label, multiline, placeholder }) => (
           <label key={key} className={`block text-sm text-stone-600 ${multiline ? "md:col-span-2" : ""}`}>
             {label}
             {multiline ? (
               <textarea name={key} defaultValue={data.settings[key]} rows={5} className="input mt-1" />
             ) : (
-              <input name={key} defaultValue={data.settings[key]} className="input mt-1" />
+              <input name={key} defaultValue={data.settings[key]} placeholder={placeholder} className="input mt-1" />
             )}
           </label>
         ))}
