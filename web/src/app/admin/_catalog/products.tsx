@@ -5,6 +5,8 @@ import { fileUrl, type AdminProduct, type ProductData } from "@/lib/api";
 import { useAdmin, type AdminProps } from "../use-admin";
 import { Icon } from "@/components/icon";
 import { resizeImage } from "@/lib/resize";
+import { Price, SaleBadge } from "@/components/catalog/price";
+import { CURRENCIES, plainAmount, saleBadge, salePrice, type Currency } from "@/lib/sale";
 
 type Call = ReturnType<typeof useAdmin>["call"];
 
@@ -13,7 +15,7 @@ const STATUS: Record<AdminProduct["status"], { label: string; className: string 
   published: { label: "Published", className: "bg-green-100 text-green-800" },
   changed: { label: "Unpublished changes", className: "bg-amber-100 text-amber-800" },
 };
-const EMPTY: ProductData = { name: "", type: "mirror", price: "", description: "", inclusions: [], photos: [], visible: true };
+const EMPTY: ProductData = { name: "", type: "mirror", price: "", currency: "PHP", description: "", inclusions: [], photos: [], visible: true, discount: 0, saleLabel: "", saleEnds: null };
 
 /** Uploads one image for the catalog and returns the stored file name. */
 export async function uploadImage(call: Call, file: File) {
@@ -70,7 +72,8 @@ export function ProductsTab(props: AdminProps) {
                   {!p.draft.visible && <span className="rounded-full border border-stone-200 px-2.5 py-0.5 text-xs">Hidden</span>}
                 </div>
                 <p className="font-medium">{p.draft.name}</p>
-                {p.draft.price && <p className="text-sm text-accent-ink">{p.draft.price}</p>}
+                {p.draft.price && <Price product={p.draft} className="text-sm text-accent-ink" />}
+                {!!p.draft.discount && <p className="text-xs text-stone-500">{saleBadge(p.draft.discount, p.draft.saleLabel)}{p.draft.saleEnds && ` · until ${p.draft.saleEnds}`}</p>}
               </div>
             </button>
             <div className="mt-auto flex items-center justify-between border-t border-stone-100 px-4 py-2 text-sm">
@@ -116,7 +119,8 @@ export function ProductsTab(props: AdminProps) {
 function ProductEditor({ product, call, onClose }: { product: AdminProduct | null; call: Call; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [current, setCurrent] = useState(product);
-  const [draft, setDraft] = useState<ProductData>(product?.draft ?? EMPTY);
+  // Products saved before sales existed lack the sale fields
+  const [draft, setDraft] = useState<ProductData>(() => ({ ...EMPTY, ...product?.draft, price: plainAmount(product?.draft.price ?? "") }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const set = <K extends keyof ProductData>(key: K, value: ProductData[K]) => setDraft((d) => ({ ...d, [key]: value }));
@@ -192,10 +196,41 @@ function ProductEditor({ product, call, onClose }: { product: AdminProduct | nul
             Name
             <input value={draft.name} onChange={(e) => set("name", e.target.value)} required maxLength={120} placeholder="Classic Gold" className="input mt-1" />
           </label>
-          <label className="block text-sm text-stone-600">
-            Price
-            <input value={draft.price} onChange={(e) => set("price", e.target.value)} maxLength={60} placeholder="from ₱15,000" className="input mt-1" />
-          </label>
+          <div className="text-sm text-stone-600">
+            <label htmlFor="product-price">Price</label>
+            <div className="mt-1 flex gap-2">
+              <div role="radiogroup" aria-label="Currency" className="flex shrink-0 rounded-full bg-white p-1 shadow-sm">
+                {(Object.keys(CURRENCIES) as Currency[]).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    role="radio"
+                    aria-checked={(draft.currency ?? "PHP") === c}
+                    aria-label={c === "PHP" ? "Philippine peso" : "US dollar"}
+                    onClick={() => set("currency", c)}
+                    className={`w-10 cursor-pointer rounded-full py-1.5 text-base ${(draft.currency ?? "PHP") === c ? "bg-foreground text-background" : "text-stone-600"}`}
+                  >
+                    {CURRENCIES[c]}
+                  </button>
+                ))}
+              </div>
+              <div className="relative flex-1">
+                <span aria-hidden className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-stone-500">
+                  {CURRENCIES[draft.currency ?? "PHP"]}
+                </span>
+                <input
+                  id="product-price"
+                  inputMode="decimal"
+                  value={draft.price}
+                  onChange={(e) => set("price", e.target.value.replace(/[^\d.,]/g, ""))}
+                  maxLength={16}
+                  placeholder="15000"
+                  className="input pl-7"
+                />
+              </div>
+            </div>
+          </div>
+          <SaleFields draft={draft} set={set} />
           <label className="block text-sm text-stone-600">
             Description
             <textarea value={draft.description} onChange={(e) => set("description", e.target.value)} maxLength={3000} rows={4} className="input mt-1" />
@@ -378,5 +413,67 @@ export function PhotoPicker({
       </ul>
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
     </div>
+  );
+}
+
+/** Discount %, badge label and end date, with a live preview of how the card will look. */
+function SaleFields({ draft, set }: { draft: ProductData; set: <K extends keyof ProductData>(key: K, value: ProductData[K]) => void }) {
+  const discount = draft.discount ?? 0;
+  const sale = salePrice(draft.price.replace(/,/g, ""), draft.currency, discount);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(new Date());
+  const ended = !!draft.saleEnds && draft.saleEnds < today;
+
+  return (
+    <fieldset className="space-y-3 rounded-xl border border-stone-200 bg-white p-4">
+      <legend className="px-1 text-sm text-stone-600">Sale</legend>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="block text-sm text-stone-600">
+          Discount %
+          <input
+            type="number"
+            min={0}
+            max={90}
+            step={1}
+            value={discount || ""}
+            onChange={(e) => set("discount", Math.max(0, Math.min(90, Math.round(Number(e.target.value) || 0))))}
+            placeholder="0 = no sale"
+            className="input mt-1"
+          />
+        </label>
+        <label className="block text-sm text-stone-600">
+          Badge label <span className="text-stone-400">(optional)</span>
+          <input value={draft.saleLabel ?? ""} onChange={(e) => set("saleLabel", e.target.value)} maxLength={40} placeholder="Holiday sale" className="input mt-1" />
+        </label>
+        <label className="block text-sm text-stone-600">
+          Ends on <span className="text-stone-400">(optional)</span>
+          <input type="date" value={draft.saleEnds ?? ""} onChange={(e) => set("saleEnds", e.target.value || null)} className="input mt-1" />
+        </label>
+      </div>
+
+      {discount > 0 &&
+        (sale ? (
+          <div className="flex items-center gap-4">
+            <div className="relative aspect-4/5 w-40 shrink-0 overflow-hidden rounded-lg bg-linear-to-br from-accent to-background">
+              {draft.photos[0] && <img src={fileUrl(draft.photos[0])} alt="" className="h-full w-full object-cover" />}
+              {/* Drawn at card size, shrunk to fit the thumbnail */}
+              <div className="absolute inset-0 w-[133%] origin-top-left scale-75">
+                <SaleBadge product={{ ...draft, price: draft.price.replace(/,/g, ""), discount }} />
+              </div>
+            </div>
+            <div className="text-sm">
+              <p className="text-xs tracking-[0.2em] text-stone-500 uppercase">Preview</p>
+              <p className="font-display mt-1 text-xl">{draft.name || "Product name"}</p>
+              <Price product={{ ...draft, price: draft.price.replace(/,/g, ""), discount }} className="text-accent-ink" />
+              <p className="mt-1 text-xs text-stone-500">
+                Badge: {saleBadge(discount, draft.saleLabel?.trim())}
+                {draft.saleEnds && ` · ends ${draft.saleEnds}`}
+              </p>
+              {ended && <p className="mt-1 text-xs text-amber-700">This end date has passed, so visitors see the regular price.</p>}
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-amber-700">Add a price above to show the sale.</p>
+        ))}
+    </fieldset>
   );
 }

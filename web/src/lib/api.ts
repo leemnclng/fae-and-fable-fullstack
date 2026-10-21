@@ -1,4 +1,5 @@
 import type { HeadlineFont, NoteFont, NoteTemplate } from "./event-style";
+import type { Currency } from "./sale";
 
 export const API = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
 
@@ -55,11 +56,18 @@ export type SectionType = Section["type"];
 export type ProductData = {
   name: string;
   type: "mirror" | "package";
+  /** Plain amount like "15000" ("" = no price); show it with formatPrice. */
   price: string;
+  currency?: Currency;
   description: string;
   inclusions: string[];
   photos: string[];
   visible: boolean;
+  /** Whole percent off (0 = no sale); public products report 0 once the sale has ended. */
+  discount?: number;
+  saleLabel?: string;
+  /** Last day of the sale, YYYY-MM-DD (Philippine time). */
+  saleEnds?: string | null;
 };
 export type AdminProduct = { id: number; sort: number; draft: ProductData; published: ProductData | null; status: "draft" | "published" | "changed" };
 export type PublicProduct = { id: number } & Omit<ProductData, "visible">;

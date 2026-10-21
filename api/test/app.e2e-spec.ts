@@ -146,20 +146,58 @@ describe('Fae&Fable API', () => {
     const act = (id: number, action: 'publish' | 'discard') => request(app.getHttpServer()).post(`${products}/${id}/${action}`).set('Authorization', admin);
     const upload = async () => (await request(app.getHttpServer()).post('/admin/catalog/uploads').set('Authorization', admin).attach('image', JPEG, 'a.jpg').expect(201)).body.file as string;
 
+    it('stores the price as a plain amount with a peso or dollar currency', async () => {
+      const base = { name: 'Price Arch', type: 'mirror' };
+      const p = (await create({ ...base, price: ' 15,000 ' }).expect(201)).body;
+      expect(p.draft).toMatchObject({ price: '15000', currency: 'PHP' });
+      expect((await save(p.id, { ...base, price: '1299.5', currency: 'USD' }).expect(200)).body.draft).toMatchObject({ price: '1299.5', currency: 'USD' });
+      expect((await save(p.id, { ...base, price: '', currency: 'USD' }).expect(200)).body.draft).toMatchObject({ price: '' });
+      for (const price of ['from ₱15,000', '₱15,000', '15000-20000', '12.345', '-5', '99999999999']) await save(p.id, { ...base, price }).expect(400);
+      await save(p.id, { ...base, price: '100', currency: 'EUR' }).expect(400);
+      await request(app.getHttpServer()).delete(`${products}/${p.id}`).set('Authorization', admin).expect(200);
+    });
+
+    it('puts a product on sale by percent, with an optional badge label and end date', async () => {
+      const http = request(app.getHttpServer());
+      const base = { name: 'Sale Arch', type: 'mirror', price: '15000' };
+      // No discount by default; pesos unless the admin picks dollars
+      const plain = (await create(base).expect(201)).body;
+      expect(plain.draft).toMatchObject({ currency: 'PHP', discount: 0, saleLabel: '', saleEnds: null });
+
+      // 1–90 whole percent; a sale needs a price; dates are YYYY-MM-DD
+      await save(plain.id, { ...base, discount: 95 }).expect(400);
+      await save(plain.id, { ...base, discount: 12.5 }).expect(400);
+      await save(plain.id, { ...base, price: '', discount: 20 }).expect(400);
+      await save(plain.id, { ...base, discount: 20, saleEnds: '12/31/2026' }).expect(400);
+      await save(plain.id, { ...base, discount: 20, saleLabel: 'x'.repeat(41) }).expect(400);
+
+      const saved = (await save(plain.id, { ...base, discount: 20, saleLabel: ' Holiday sale ', saleEnds: '2999-12-31' }).expect(200)).body;
+      expect(saved.draft).toMatchObject({ discount: 20, saleLabel: 'Holiday sale', saleEnds: '2999-12-31' });
+      await act(plain.id, 'publish').expect(201);
+      expect((await http.get(`/catalog/products/${plain.id}`).expect(200)).body).toMatchObject({ price: '15000', currency: 'PHP', discount: 20, saleLabel: 'Holiday sale' });
+
+      // After the end date visitors see the regular price again; the admin's draft keeps the settings
+      await save(plain.id, { ...base, discount: 20, saleLabel: 'Holiday sale', saleEnds: '2020-01-31' }).expect(200);
+      await act(plain.id, 'publish').expect(201);
+      expect((await http.get(`/catalog/products/${plain.id}`).expect(200)).body).toMatchObject({ discount: 0 });
+      expect((await http.get('/catalog').expect(200)).body.products.find((p: { id: number }) => p.id === plain.id)).toMatchObject({ discount: 0 });
+      await request(app.getHttpServer()).delete(`${products}/${plain.id}`).set('Authorization', admin).expect(200);
+    });
+
     it('products stay draft until published', async () => {
       const http = request(app.getHttpServer());
-      const created = (await create({ name: 'Rose Arch', type: 'mirror', price: '₱18,000' }).expect(201)).body;
+      const created = (await create({ name: 'Rose Arch', type: 'mirror', price: '18000' }).expect(201)).body;
       expect(created).toMatchObject({ status: 'draft', published: null, draft: { name: 'Rose Arch', visible: true, inclusions: [], photos: [] } });
       await http.get(`/catalog/products/${created.id}`).expect(404);
 
       expect((await act(created.id, 'publish').expect(201)).body.status).toBe('published');
       const live = (await http.get(`/catalog/products/${created.id}`).expect(200)).body;
-      expect(live).toMatchObject({ id: created.id, name: 'Rose Arch', price: '₱18,000' });
+      expect(live).toMatchObject({ id: created.id, name: 'Rose Arch', price: '18000' });
       expect(live).not.toHaveProperty('visible');
 
-      const hidden = { name: 'Rose Arch', type: 'mirror', price: '₱20,000', visible: false };
+      const hidden = { name: 'Rose Arch', type: 'mirror', price: '20000', visible: false };
       expect((await save(created.id, hidden).expect(200)).body.status).toBe('changed');
-      expect((await http.get(`/catalog/products/${created.id}`).expect(200)).body.price).toBe('₱18,000');
+      expect((await http.get(`/catalog/products/${created.id}`).expect(200)).body.price).toBe('18000');
       await act(created.id, 'publish').expect(201);
       await http.get(`/catalog/products/${created.id}`).expect(404);
 

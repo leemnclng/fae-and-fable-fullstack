@@ -5,6 +5,7 @@ import type { MouseEvent, ReactNode } from "react";
 import { fileUrl, type PublicProduct, type Section, type Settings } from "@/lib/api";
 import { InquireButton } from "./inquire";
 import { PhotoPlaceholder } from "./section-shell";
+import { Price, SaleBadge } from "./price";
 import { Icon } from "@/components/icon";
 
 type ProductsSection = Extract<Section, { type: "products" }>;
@@ -64,6 +65,7 @@ function ProductCard({
   variant: "card" | "row";
 }) {
   const photo = p.photos[0];
+  const badge = showPrice && <SaleBadge product={p} />;
   const image = photo ? (
     <img src={fileUrl(photo)} alt={p.name} loading="lazy" className="h-full w-full object-cover transition duration-700 group-hover:scale-105 motion-reduce:transition-none" />
   ) : (
@@ -75,7 +77,7 @@ function ProductCard({
         <ProductLink id={p.id} preview={preview} className="font-display text-2xl md:text-3xl hover:underline">
           {p.name}
         </ProductLink>
-        {showPrice && p.price && <p className="shrink-0 text-accent-ink">{p.price}</p>}
+        {showPrice && p.price && <Price product={p} className="shrink-0 justify-end text-accent-ink" />}
       </div>
       {p.description && <p className="mt-2 line-clamp-2 opacity-80">{p.description}</p>}
       {p.inclusions.length > 0 && (
@@ -101,7 +103,8 @@ function ProductCard({
   if (variant === "row")
     return (
       <article className="group flex flex-col gap-5 py-8 sm:flex-row">
-        <ProductLink id={p.id} preview={preview} className="block aspect-4/3 overflow-hidden rounded-xl sm:w-64 sm:shrink-0" label={p.name}>
+        <ProductLink id={p.id} preview={preview} className="relative block aspect-4/3 overflow-hidden rounded-xl sm:w-64 sm:shrink-0" label={p.name}>
+          {badge}
           {image}
         </ProductLink>
         <div className="flex-1">{details}</div>
@@ -109,7 +112,8 @@ function ProductCard({
     );
   return (
     <article className="group">
-      <ProductLink id={p.id} preview={preview} className="block aspect-4/5 overflow-hidden rounded-xl" label={p.name}>
+      <ProductLink id={p.id} preview={preview} className="relative block aspect-4/5 overflow-hidden rounded-xl" label={p.name}>
+        {badge}
         {image}
       </ProductLink>
       <div className="mt-5">{details}</div>

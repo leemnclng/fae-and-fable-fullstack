@@ -4,7 +4,9 @@ import { Suspense } from "react";
 import { Gallery } from "@/components/gallery";
 import { InquireButton } from "@/components/catalog/inquire";
 import { PhotoPlaceholder } from "@/components/catalog/section-shell";
-import { api, ApiError, fileUrl, type PublicProduct, type SiteContent } from "@/lib/api";
+import { Price } from "@/components/catalog/price";
+import { saleBadge } from "@/lib/sale";
+import { api, ApiError, fileUrl, formatDate, type PublicProduct, type SiteContent } from "@/lib/api";
 import { Eyebrow, GUTTER, SiteChrome } from "../../events/chrome";
 import { Icon } from "@/components/icon";
 
@@ -45,7 +47,13 @@ async function Product({ params }: { params: Promise<{ id: string }> }) {
           </Link>
           <Eyebrow className="mt-6">{product.type === "mirror" ? "Mirror" : "Package"}</Eyebrow>
           <h1 className="font-display mt-3 text-5xl leading-tight md:text-7xl">{product.name}</h1>
-          {product.price && <p className="mt-3 text-xl text-accent-ink">{product.price}</p>}
+          {product.price && <Price product={product} className="mt-3 text-xl text-accent-ink" />}
+          {product.discount ? (
+            <p className="mt-3 inline-block rounded-full bg-accent-ink px-3 py-1 text-xs font-semibold tracking-wide text-white uppercase">
+              {saleBadge(product.discount, product.saleLabel)}
+              {product.saleEnds && ` · until ${formatDate(product.saleEnds)}`}
+            </p>
+          ) : null}
           {product.description && <p className="mt-6 whitespace-pre-line text-lg leading-relaxed text-stone-600">{product.description}</p>}
           {product.inclusions.length > 0 && (
             <>
